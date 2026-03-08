@@ -1,0 +1,107 @@
+@startuml CoffeeVendingMachine
+skinparam backgroundColor #FAFAFA
+skinparam classBackgroundColor #FFFFFF
+skinparam classBorderColor #6366f1
+skinparam classFontColor #1e1b4b
+skinparam classHeaderBackgroundColor #6366f1
+skinparam classHeaderFontColor #FFFFFF
+skinparam ArrowColor #6366f1
+skinparam stereotypeCBackgroundColor #e0e7ff
+skinparam stereotypeIBackgroundColor #fce7f3
+skinparam shadowing false
+skinparam linetype ortho
+
+' ── Interface ─────────────────────────────
+interface PaymentStrategy {
+    + pay(amount : int) : boolean
+    + getType() : String
+}
+
+' ── Abstract Class ────────────────────────
+abstract class Beverage {
+    # name : String
+    # price : int
+    --
+    + getName() : String
+    + getPrice() : int
+    + {abstract} make() : void
+}
+
+' ── Concrete Beverages ────────────────────
+class Espresso {
+    + Espresso()
+    + make() : void
+}
+
+class Americano {
+    + Americano()
+    + make() : void
+}
+
+class CafeLatte {
+    + CafeLatte()
+    + make() : void
+}
+
+class HotChoco {
+    + HotChoco()
+    + make() : void
+}
+
+' ── Payment Implementations ───────────────
+class CashPayment {
+    - balance : int
+    --
+    + insert(amount : int) : void
+    + pay(amount : int) : boolean
+    + refund() : int
+    + getType() : String
+}
+
+class CardPayment {
+    - cardNumber : String
+    --
+    + CardPayment(cardNumber : String)
+    + pay(amount : int) : boolean
+    + getType() : String
+}
+
+' ── VendingMachine ────────────────────────
+class VendingMachine {
+    - beverages : Beverage[]
+    - stock : int[]
+    - totalSales : int
+    - paymentStrategy : PaymentStrategy
+    --
+    + showMenu() : void
+    + selectBeverage(index : int) : Beverage
+    + setPaymentStrategy(strategy : PaymentStrategy) : void
+    + purchase(beverage : Beverage) : boolean
+    + cancelPayment() : void
+}
+
+' ── Admin ─────────────────────────────────
+class Admin {
+    - password : String
+    - machine : VendingMachine
+    --
+    + authenticate(input : String) : boolean
+    + restock(index : int, amount : int) : void
+    + showStatus() : void
+}
+
+' ── Relationships ─────────────────────────
+Beverage <|-- Espresso
+Beverage <|-- Americano
+Beverage <|-- CafeLatte
+Beverage <|-- HotChoco
+
+PaymentStrategy <|.. CashPayment
+PaymentStrategy <|.. CardPayment
+
+VendingMachine o-- "1..*" Beverage
+VendingMachine --> PaymentStrategy : <<strategy>>
+
+Admin --> VendingMachine
+
+@enduml

@@ -1,0 +1,64 @@
+Java:
+  label: Java
+  permalink: /java
+  description: Java 프로그래밍 관련 포스트
+
+알고리즘:
+  label: 알고리즘
+  permalink: /algorithm
+  description: 알고리즘 문제 풀이
+
+백준:
+  label: 백준
+  permalink: /baekjoon
+  description: 백준 온라인 저지 문제 풀이
+
+BFS:
+  label: BFS
+  permalink: /bfs
+  description: 너비 우선 탐색 알고리즘
+
+다익스트라:
+  label: 다익스트라
+  permalink: /dijkstra
+  description: 다익스트라 최단경로 알고리즘
+
+Generic:
+  label: Generic
+  permalink: /generic
+  description: Java 제네릭
+
+기본기:
+  label: 기본기
+  permalink: /basics
+  description: Java 기본 개념 정리
+
+네트워크:
+  label: 네트워크
+  permalink: /network
+  description: 네트워크 관련 개념 정리
+
+기초이론:
+  label: 기초이론
+  permalink: /theory
+  description: CS 기초 이론 정리
+
+JDBC:
+  label: JDBC
+  permalink: /jdbc
+  description: Java Database Connectivity
+
+데이터베이스:
+  label: 데이터베이스
+  permalink: /database
+  description: 데이터베이스 관련 포스트
+
+Spring:
+  label: Spring
+  permalink: /spring
+  description: Spring / Spring Boot 관련 포스트
+
+디자인패턴:
+  label: 디자인패턴
+  permalink: /design-pattern
+  description: 소프트웨어 디자인 패턴 정리
