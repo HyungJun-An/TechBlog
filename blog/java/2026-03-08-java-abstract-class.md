@@ -2,7 +2,7 @@
 title: "abstract vs interface"
 date: 2026-03-08
 authors: HyungJun
-tags: [Java, 기본기]
+tags: [Java, 기본기, 상속]
 ---
 
 추상 클래스(Abstract Class)는 인터페이스와 일반 클래스의 중간 어딘가에 위치합니다. "언제 `abstract`를 쓰고, 언제 `interface`를 써야 하는가?"라는 질문에 명확히 답하기 위해, 추상 클래스의 개념부터 실무 선택 기준, 그리고 둘을 함께 쓰는 템플릿 메서드 패턴까지 파헤칩니다.

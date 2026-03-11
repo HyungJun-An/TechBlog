@@ -1,20 +1,27 @@
 import React, {memo, useState} from 'react';
 import clsx from 'clsx';
 import {translate} from '@docusaurus/Translate';
-import {
-  useVisibleBlogSidebarItems,
-  BlogSidebarItemList,
-} from '@docusaurus/plugin-content-blog/client';
-import BlogSidebarContent from '@theme/BlogSidebar/Content';
 import Link from '@docusaurus/Link';
 import {useLocation} from '@docusaurus/router';
 import styles from './styles.module.css';
 
 const CATEGORIES = [
-  {label: '전체', to: '/blog'},
-  {label: 'Java', to: '/blog/tags/java'},
+  {label: '✨ 전체 보기', to: '/blog'},
   {
-    label: '알고리즘',
+    label: '☕ Java',
+    to: '/blog/tags/java',
+    children: [
+      {label: '전체', to: '/blog/tags/java'},
+      {label: '기본기', to: '/blog/tags/basics'},
+      {label: '자료구조', to: '/blog/tags/자료구조'},
+      {label: '상속', to: '/blog/tags/상속'},
+      {label: 'Generic', to: '/blog/tags/generic'},
+      {label: ' 디자인 패턴',to: '/blog/tags/design-pattern'},
+      {label: 'JDBC / DB', to: '/blog/tags/jdbc'},
+    ],
+  },
+  {
+    label: '🚀 알고리즘',
     to: '/blog/tags/algorithm',
     children: [
       {label: '전체', to: '/blog/tags/algorithm'},
@@ -22,20 +29,34 @@ const CATEGORIES = [
       {label: '다익스트라', to: '/blog/tags/dijkstra'},
     ],
   },
-  {label: '네트워크', to: '/blog/tags/network'},
+  {
+    label: '🍃 Spring',
+    to: '/blog/tags/spring',
+  },
+  {
+    label: '🌐 네트워크',
+    to: '/blog/tags/network',
+    children: [
+      {label: '전체', to: '/blog/tags/network'},
+      {label: '기초 이론', to: '/blog/tags/theory'},
+    ],
+  }
+  
 ];
 
 function CategoryItem({cat, location}) {
   const hasChildren = cat.children && cat.children.length > 0;
+  
+  // 현재 경로가 이 카테고리나 그 자식에 속하는지 확인
   const isChildActive = hasChildren && cat.children.some((c) =>
-    location.pathname.startsWith(c.to)
+    location.pathname === c.to || location.pathname === `${c.to}/`
   );
   const isSelfActive =
     cat.to === '/blog'
       ? location.pathname === '/blog' || location.pathname === '/blog/'
-      : location.pathname === cat.to;
+      : location.pathname === cat.to || location.pathname === `${cat.to}/`;
 
-  const [open, setOpen] = useState(isChildActive);
+  const [open, setOpen] = useState(isChildActive || isSelfActive);
 
   if (!hasChildren) {
     return (
@@ -60,7 +81,7 @@ function CategoryItem({cat, location}) {
       {open && (
         <ul className="sidebar-categories__list sidebar-categories__sublist">
           {cat.children.map((child) => {
-            const isActive = location.pathname === child.to || location.pathname.startsWith(child.to + '/');
+            const isActive = location.pathname === child.to || location.pathname === `${child.to}/`;
             return (
               <li
                 key={child.to}
@@ -92,36 +113,17 @@ function CategorySection() {
   );
 }
 
-const ListComponent = ({items}) => (
-  <BlogSidebarItemList
-    items={items}
-    ulClassName={clsx(styles.sidebarItemList, 'clean-list')}
-    liClassName={styles.sidebarItem}
-    linkClassName={styles.sidebarItemLink}
-    linkActiveClassName={styles.sidebarItemLinkActive}
-  />
-);
-
-function BlogSidebarDesktop({sidebar}) {
-  const items = useVisibleBlogSidebarItems(sidebar.items);
+function BlogSidebarDesktop() {
   return (
     <aside className="col col--3">
       <nav
         className={clsx(styles.sidebar, 'thin-scrollbar')}
         aria-label={translate({
           id: 'theme.blog.sidebar.navAriaLabel',
-          message: 'Blog recent posts navigation',
-          description: 'The ARIA label for recent posts in the blog sidebar',
+          message: 'Blog category navigation',
+          description: 'The ARIA label for categories in the blog sidebar',
         })}>
         <CategorySection />
-        <div className={clsx(styles.sidebarItemTitle, 'margin-bottom--md')}>
-          {sidebar.title}
-        </div>
-        <BlogSidebarContent
-          items={items}
-          ListComponent={ListComponent}
-          yearGroupHeadingClassName={styles.yearGroupHeading}
-        />
       </nav>
     </aside>
   );
