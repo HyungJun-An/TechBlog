@@ -58,6 +58,21 @@ Spring:
   permalink: /spring
   description: Spring / Spring Boot 관련 포스트
 
+Inheritance:
+  label: 상속
+  permalink: /inheritance
+  description: Java 상속과 다형성
+
+JCF:
+  label: JCF
+  permalink: /jcf
+  description: Java Collection Framework
+
+DataStructure:
+  label: 자료구조
+  permalink: /data-structure
+  description: 알고리즘 및 자료구조 정리
+
 디자인패턴:
   label: 디자인패턴
   permalink: /design-pattern
