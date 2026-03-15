@@ -94,6 +94,7 @@ const config = {
               {label: 'Java', to: '/blog/tags/java'},
               {label: '알고리즘', to: '/blog/tags/algorithm'},
               {label: '네트워크', to: '/blog/tags/network'},
+              {label: '인프라', to: '/blog/tags/infra'},
             ],
           },
           {to: '/docs/intro', label: '아카이브', position: 'left'},
@@ -120,6 +121,7 @@ const config = {
               {label: 'Java', to: '/blog/tags/java'},
               {label: '알고리즘', to: '/blog/tags/algorithm'},
               {label: '네트워크', to: '/blog/tags/network'},
+              {label: '인프라', to: '/blog/tags/infra'},
             ],
           },
           {
