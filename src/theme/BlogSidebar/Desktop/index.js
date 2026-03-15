@@ -13,10 +13,9 @@ const CATEGORIES = [
     children: [
       {label: '전체', to: '/blog/tags/java'},
       {label: '기본기', to: '/blog/tags/basics'},
-      {label: '자료구조', to: '/blog/tags/자료구조'},
-      {label: '상속', to: '/blog/tags/상속'},
+      {label: '자료구조', to: '/blog/tags/data-structure'},
+      {label: '상속', to: '/blog/tags/inheritance'},
       {label: 'Generic', to: '/blog/tags/generic'},
-      {label: ' 디자인 패턴',to: '/blog/tags/design-pattern'},
       {label: 'JDBC / DB', to: '/blog/tags/jdbc'},
     ],
   },
@@ -25,6 +24,7 @@ const CATEGORIES = [
     to: '/blog/tags/algorithm',
     children: [
       {label: '전체', to: '/blog/tags/algorithm'},
+      {label: '백준 (BOJ)', to: '/blog/tags/baekjoon'},
       {label: 'BFS / DFS', to: '/blog/tags/bfs'},
       {label: '다익스트라', to: '/blog/tags/dijkstra'},
     ],
@@ -40,8 +40,11 @@ const CATEGORIES = [
       {label: '전체', to: '/blog/tags/network'},
       {label: '기초 이론', to: '/blog/tags/theory'},
     ],
-  }
-  
+  },
+  {
+    label: '🎨 디자인 패턴',
+    to: '/blog/tags/design-pattern',
+  },
 ];
 
 function CategoryItem({cat, location}) {

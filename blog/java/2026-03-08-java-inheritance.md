@@ -2,7 +2,7 @@
 title: "상속, 오버로딩, 오버라이딩, VMI"
 date: 2026-03-08
 authors: HyungJun
-tags: [Java, 기본기,상속]
+tags: [Java, 기본기, Inheritance]
 ---
 
 상속으로 코드를 재사용하고, 오버로딩과 오버라이딩으로 메서드를 유연하게 다루며, JVM이 실행 시점에 어떤 메서드를 호출할지 결정하는 VMI 동작 원리까지 깊이 파헤칩니다.

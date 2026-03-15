@@ -2,7 +2,7 @@
 title: "Java Collection Framework (JCF)"
 date: 2026-03-11
 authors: HyungJun
-tags: [Java, 기본기, JCF, 자료구조]
+tags: [Java, 기본기, JCF, DataStructure]
 ---
 `Collection`,  `자료구조`, `List`, `Set`, `Map`
 
