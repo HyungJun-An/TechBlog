@@ -3,6 +3,7 @@ import Link from '@docusaurus/Link';
 import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
 import Layout from '@theme/Layout';
 import Heading from '@theme/Heading';
+import {useColorMode} from '@docusaurus/theme-common';
 import styles from './index.module.css';
 
 function Terminal() {
@@ -37,16 +38,33 @@ function Terminal() {
 
 function HomepageHeader() {
   const {siteConfig} = useDocusaurusContext();
+  const {colorMode} = useColorMode();
+  
+  // 테마에 따른 컬러 설정 (다크: 흰색계열, 라이트: 검정)
+  const typingColor = colorMode === 'dark' ? 'F7F7F7' : '000000';
+  const typingSrc = `https://readme-typing-svg.demolab.com?font=Fira+Code&pause=1000&color=${typingColor}&width=435&center=true&vCenter=true&lines=%F0%9F%91%8B%EC%95%88%EB%85%95%ED%95%98%EC%84%B8%EC%9A%94!+%EC%95%88%ED%98%95%EC%A4%80%EC%9E%85%EB%8B%88%EB%8B%A4`;
+
   return (
     <header className={clsx('hero hero--primary', styles.heroBanner)}>
       <div className="container" style={{ position: 'relative', zIndex: 1 }}>
-        <div className="badge badge--primary" style={{ marginBottom: '1.5rem', textTransform: 'uppercase', fontWeight: 700 }}>Full Stack Developer</div>
+        <div className="badge badge--primary" style={{ marginBottom: '1.5rem', textTransform: 'uppercase', fontWeight: 800, padding: '0.6rem 1.5rem', letterSpacing: '0.1em' }}>Java Backend & DevOps</div>
         <Heading as="h1" className="hero__title">
           {siteConfig.title}
         </Heading>
-        <p className="hero__subtitle" style={{ fontSize: '1.5rem', opacity: 0.8, maxWidth: '800px', margin: '1rem auto' }}>
-          {siteConfig.tagline}
-        </p>
+        <div style={{ 
+          minHeight: '60px', 
+          margin: '1rem auto', 
+          display: 'flex', 
+          justifyContent: 'center', 
+          alignItems: 'center',
+          width: '100%' 
+        }}>
+          <img 
+            src={typingSrc} 
+            alt="Typing SVG" 
+            style={{ maxWidth: '100%', height: 'auto' }}
+          />
+        </div>
         <Terminal />
         <div className={styles.buttons} style={{ marginTop: '3rem' }}>
           <Link
@@ -68,9 +86,18 @@ function HomepageHeader() {
 
 function TechStack() {
   const stacks = [
-    { category: 'Frontend', items: ['React', 'TypeScript', 'Tailwind', 'Next.js'] },
-    { category: 'Backend', items: ['Node.js', 'Spring Boot', 'PostgreSQL', 'Redis'] },
-    { category: 'Infra', items: ['Docker', 'AWS', 'GitHub Actions', 'Terraform'] },
+    { 
+      category: 'Backend', 
+      items: ['Java', 'Spring Boot', 'Spring Security', 'Spring Data JPA', 'MySQL', 'Redis', 'Elasticsearch'] 
+    },
+    { 
+      category: 'DevOps & Cloud', 
+      items: ['Docker', 'Jenkins', 'GitHub Actions', 'Prometheus', 'Grafana', 'Nginx', 'AWS'] 
+    },
+    { 
+      category: 'Frontend & Others', 
+      items: ['React', 'TypeScript', 'JavaScript', 'Thymeleaf', 'Git', 'SOLID'] 
+    },
   ];
 
   return (

@@ -12,7 +12,7 @@ import {themes as prismThemes} from 'prism-react-renderer';
 const config = {
   title: 'Dev HyungJun',
   tagline: '기록하고 공유하는 개발자 형준',
-  favicon: 'img/favicon.ico',
+  favicon: 'img/favicon.svg',
 
   // Future flags, see https://docusaurus.io/docs/api/docusaurus-config#future
   future: {
@@ -49,9 +49,9 @@ const config = {
           sidebarPath: './sidebars.js',
         },
         blog: {
-          showReadingTime: true,
+          showReadingTime: false,
           blogSidebarTitle: '최근 포스트',
-          blogSidebarCount: 'ALL',
+          blogSidebarCount: 10,
           feedOptions: {
             type: ['rss', 'atom'],
             xslt: true,

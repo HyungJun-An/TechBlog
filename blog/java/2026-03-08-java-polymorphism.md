@@ -2,7 +2,7 @@
 title: "Java 다형성 깊게 파기 "
 date: 2026-03-08
 authors: HyungJun
-tags: [Java, 기본기]
+tags: [Java, 기본기,상속]
 ---
 `필드 하이딩`,`멤버 노출`,` extends vs implements`, `다이아몬드 문제`, `전략 패턴`
 
