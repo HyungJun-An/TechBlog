@@ -45,6 +45,15 @@ const CATEGORIES = [
     label: '🎨 디자인 패턴',
     to: '/blog/tags/design-pattern',
   },
+  {
+    label: '🛠️ 인프라',
+    to: '/blog/tags/infra',
+    children: [
+      {label: '전체', to: '/blog/tags/infra'},
+      {label: 'Docker', to: '/blog/tags/docker'},
+      {label: 'DB', to: '/blog/tags/db'},
+    ],
+  },
 ];
 
 function CategoryItem({cat, location}) {
