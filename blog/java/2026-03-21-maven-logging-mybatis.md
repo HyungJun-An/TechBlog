@@ -1,5 +1,5 @@
 ---
-title: "Maven POM 심화, 로깅(Log4j2·SLF4J·Logback), MyBatis 입문"
+title: "Maven ,MyBatis, Logging"
 date: 2026-03-21
 authors: HyungJun
 tags: [Java, JDBC, 데이터베이스, 기초이론]
