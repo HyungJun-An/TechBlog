@@ -27,6 +27,7 @@ const CATEGORIES = [
       {label: '백준 (BOJ)', to: '/blog/tags/baekjoon'},
       {label: 'BFS / DFS', to: '/blog/tags/bfs'},
       {label: '다익스트라', to: '/blog/tags/dijkstra'},
+      {label: '위상정렬', to: '/blog/tags/topological-sort'},
     ],
   },
   {
