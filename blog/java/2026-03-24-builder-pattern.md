@@ -2,7 +2,7 @@
 title: "Builder 패턴 직접 구현하기"
 date: 2026-03-24
 authors: HyungJun
-tags: [Java, 디자인패턴]
+tags: [Java, 디자인패턴, Builder]
 ---
 
 `@Builder` 어노테이션 한 줄로 끝나지만, 내부에서 어떤 일이 일어나는지 직접 만들어봐야 진짜 이해가 됩니다. 점층적 생성자 패턴의 한계에서 출발해 Builder를 손으로 구현하는 과정을 정리합니다.

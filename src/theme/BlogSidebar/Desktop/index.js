@@ -17,6 +17,7 @@ const CATEGORIES = [
       {label: '상속', to: '/blog/tags/inheritance'},
       {label: 'Generic', to: '/blog/tags/generic'},
       {label: 'JDBC / DB', to: '/blog/tags/jdbc'},
+      {label: 'Web 기초', to: '/blog/tags/web'},
     ],
   },
   {
@@ -45,6 +46,15 @@ const CATEGORIES = [
   {
     label: '🎨 디자인 패턴',
     to: '/blog/tags/design-pattern',
+    children: [
+      {label: '전체', to: '/blog/tags/design-pattern'},
+      {label: 'Singleton', to: '/blog/tags/singleton'},
+      {label: 'Builder', to: '/blog/tags/builder'},
+      {label: 'Facade', to: '/blog/tags/facade'},
+      {label: 'Factory', to: '/blog/tags/factory'},
+      {label: 'Strategy', to: '/blog/tags/strategy'},
+      {label: 'Observer', to: '/blog/tags/observer'},
+    ],
   },
   {
     label: '🛠️ 인프라',

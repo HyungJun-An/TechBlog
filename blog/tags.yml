@@ -97,3 +97,38 @@ DB:
   label: 위상정렬
   permalink: /topological-sort
   description: 위상 정렬 알고리즘
+
+Web:
+  label: Web
+  permalink: /web
+  description: HTML / CSS / JavaScript 웹 기초
+
+Singleton:
+  label: Singleton
+  permalink: /singleton
+  description: 싱글턴 디자인 패턴
+
+Builder:
+  label: Builder
+  permalink: /builder
+  description: 빌더 디자인 패턴
+
+Facade:
+  label: Facade
+  permalink: /facade
+  description: 파사드 디자인 패턴
+
+Factory:
+  label: Factory
+  permalink: /factory
+  description: 팩토리 메서드 디자인 패턴
+
+Strategy:
+  label: Strategy
+  permalink: /strategy
+  description: 전략 디자인 패턴
+
+Observer:
+  label: Observer
+  permalink: /observer
+  description: 옵저버 디자인 패턴

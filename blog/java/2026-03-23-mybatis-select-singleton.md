@@ -2,7 +2,7 @@
 title: "MyBatis SELECT 완전 정복 + 싱글턴 패턴"
 date: 2026-03-23
 authors: HyungJun
-tags: [Java, JDBC, 데이터베이스, 디자인패턴]
+tags: [Java, JDBC, 데이터베이스, 디자인패턴, Singleton]
 ---
 
 `SqlSession` `#{}` `${}` `resultMap` `selectOne` `selectList` `selectMap` `CDATA` `Singleton`
