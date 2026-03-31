@@ -132,3 +132,8 @@ Observer:
   label: Observer
   permalink: /observer
   description: 옵저버 디자인 패턴
+
+비동기:
+  label: 비동기
+  permalink: /async
+  description: 동기/비동기 프로그래밍 패턴

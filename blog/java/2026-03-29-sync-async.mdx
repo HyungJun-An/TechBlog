@@ -1,0 +1,531 @@
+---
+title: "동기(Sync) vs 비동기(Async): JavaScript와 Java의 처리 방식 비교"
+date: 2026-03-29
+authors: HyungJun
+tags: [Java, 기본기, 비동기]
+---
+
+import { useState, useEffect, useRef } from 'react';
+
+export function SyncAsyncCompare() {
+  const SPEED = 3;
+  const TASKS = [
+    { name: 'DB 조회',   simMs: 1200 },
+    { name: 'API 호출',  simMs: 1800 },
+    { name: '파일 읽기', simMs:  900 },
+  ];
+  const BAR_COLORS = ['#60a5fa', '#fb923c', '#34d399'];
+  const totalSync  = TASKS.reduce((s, t) => s + t.simMs, 0);
+  const totalAsync = Math.max(...TASKS.map(t => t.simMs));
+
+  const [phase,      setPhase]      = useState('idle');
+  const [syncProg,   setSyncProg]   = useState([0, 0, 0]);
+  const [asyncProg,  setAsyncProg]  = useState([0, 0, 0]);
+  const [syncMs,     setSyncMs]     = useState(0);
+  const [asyncMs,    setAsyncMs]    = useState(0);
+  const [syncFinal,  setSyncFinal]  = useState(null);
+  const [asyncFinal, setAsyncFinal] = useState(null);
+  const [syncCurIdx, setSyncCurIdx] = useState(0);
+
+  const rafRef      = useRef(null);
+  const startRef    = useRef(0);
+  const syncIdxRef  = useRef(0);
+  const syncStepRef = useRef(0);
+  const sDoneRef    = useRef(false);
+  const aDoneRef    = useRef(false);
+
+  const go = () => {
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    startRef.current = 0; syncIdxRef.current = 0; syncStepRef.current = 0;
+    sDoneRef.current = false; aDoneRef.current = false;
+    setSyncProg([0,0,0]); setAsyncProg([0,0,0]);
+    setSyncMs(0); setAsyncMs(0);
+    setSyncFinal(null); setAsyncFinal(null);
+    setSyncCurIdx(0); setPhase('running');
+
+    const tick = (now) => {
+      if (startRef.current === 0) { startRef.current = now; syncStepRef.current = now; }
+      const sim = (now - startRef.current) * SPEED;
+
+      if (!aDoneRef.current) {
+        const ap = TASKS.map(t => Math.min(sim / t.simMs, 1));
+        setAsyncProg(ap); setAsyncMs(sim);
+        if (ap.every(p => p >= 1)) { aDoneRef.current = true; setAsyncFinal(sim); }
+      }
+
+      if (!sDoneRef.current) {
+        const idx = syncIdxRef.current;
+        if (idx < TASKS.length) {
+          const p = Math.min((now - syncStepRef.current) * SPEED / TASKS[idx].simMs, 1);
+          setSyncProg(prev => { const n = [...prev]; n[idx] = p; return n; });
+          setSyncMs(sim);
+          if (p >= 1) {
+            const next = idx + 1; syncIdxRef.current = next; syncStepRef.current = now; setSyncCurIdx(next);
+            if (next >= TASKS.length) { sDoneRef.current = true; setSyncFinal(sim); }
+          }
+        }
+      }
+
+      if (sDoneRef.current && aDoneRef.current) { setPhase('done'); return; }
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+  };
+
+  const reset = () => {
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    setPhase('idle'); setSyncProg([0,0,0]); setAsyncProg([0,0,0]);
+    setSyncMs(0); setAsyncMs(0); setSyncFinal(null); setAsyncFinal(null);
+    setSyncCurIdx(0); startRef.current = 0;
+  };
+
+  useEffect(() => () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); }, []);
+
+  const wrap = { margin: '32px 0', borderRadius: '18px', overflow: 'hidden', border: '1px solid var(--ifm-color-emphasis-300)', background: 'var(--ifm-background-surface-color)' };
+  const header = { padding: '20px 24px', borderBottom: '1px solid var(--ifm-color-emphasis-200)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' };
+  const body = { padding: '24px', display: 'flex', gap: '16px', flexWrap: 'wrap' };
+  const syncCard = { flex: '1 1 240px', background: 'rgba(59,130,246,0.06)', border: '1px solid rgba(59,130,246,0.2)', borderRadius: '12px', padding: '18px' };
+  const asyncCard = { flex: '1 1 240px', background: 'rgba(249,115,22,0.06)', border: '1px solid rgba(249,115,22,0.2)', borderRadius: '12px', padding: '18px' };
+
+  const renderPanel = (prog, ms, final, curIdx, isSync) => {
+    const accent = isSync ? '#3b82f6' : '#f97316';
+    const label  = isSync ? '동기 (Sync)' : '비동기 (Async)';
+    const note   = isSync ? `순차 처리 · 예상 ${(totalSync/1000).toFixed(1)}s` : `병렬 처리 · 예상 ${(totalAsync/1000).toFixed(1)}s`;
+    return (
+      <div style={isSync ? syncCard : asyncCard}>
+        <div style={{ marginBottom: '18px' }}>
+          <div style={{ fontWeight: '700', fontSize: '14px', color: accent }}>{label}</div>
+          <div style={{ fontSize: '12px', color: 'var(--ifm-color-emphasis-500)', marginTop: '2px' }}>{note}</div>
+        </div>
+        {TASKS.map((task, i) => {
+          const p = prog[i];
+          const done = p >= 1;
+          const active = isSync ? (i === curIdx && phase === 'running') : (phase === 'running' && p < 1);
+          const waiting = isSync && phase === 'running' && i > curIdx && p === 0;
+          const barColor = isSync ? '#3b82f6' : BAR_COLORS[i];
+          return (
+            <div key={i} style={{ marginBottom: '14px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px', fontSize: '13px' }}>
+                <span style={{ color: 'var(--ifm-color-content)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  {task.name}
+                  {active && !done && <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: barColor, display: 'inline-block' }} />}
+                  {done && <span style={{ color: '#10b981', fontSize: '11px' }}>✓</span>}
+                  {waiting && <span style={{ color: 'var(--ifm-color-emphasis-400)', fontSize: '11px' }}>대기</span>}
+                </span>
+                <span style={{ fontSize: '12px', color: 'var(--ifm-color-emphasis-500)', fontVariantNumeric: 'tabular-nums' }}>{task.simMs}ms</span>
+              </div>
+              <div style={{ height: '8px', background: 'var(--ifm-color-emphasis-200)', borderRadius: '4px', overflow: 'hidden' }}>
+                <div style={{ height: '100%', width: `${p * 100}%`, background: done ? '#10b981' : barColor, borderRadius: '4px', transition: 'width 0.03s linear', boxShadow: active && !done ? `0 0 6px ${barColor}80` : 'none' }} />
+              </div>
+            </div>
+          );
+        })}
+        <div style={{ marginTop: '18px', padding: '12px 14px', background: 'var(--ifm-color-emphasis-100)', borderRadius: '10px' }}>
+          <div style={{ fontSize: '11px', color: 'var(--ifm-color-emphasis-500)', marginBottom: '3px', letterSpacing: '0.04em' }}>
+            {final ? '완료' : phase === 'running' ? '경과 시간' : '예상 시간'}
+          </div>
+          <div style={{ fontSize: '32px', fontWeight: '700', fontFamily: 'monospace', fontVariantNumeric: 'tabular-nums', color: final ? '#10b981' : 'var(--ifm-color-content)', lineHeight: 1.1 }}>
+            {final ? `${(final/1000).toFixed(2)}s` : phase === 'running' ? `${(ms/1000).toFixed(2)}s` : isSync ? `~${(totalSync/1000).toFixed(1)}s` : `~${(totalAsync/1000).toFixed(1)}s`}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div style={wrap}>
+      <div style={header}>
+        <div style={{ fontWeight: '700', fontSize: '15px' }}>⚡ 실시간 실행 비교</div>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <button onClick={go} disabled={phase === 'running'} style={{ padding: '8px 18px', borderRadius: '8px', border: 'none', background: phase === 'running' ? 'var(--ifm-color-emphasis-300)' : 'var(--ifm-color-primary)', color: phase === 'running' ? 'var(--ifm-color-content-secondary)' : '#fff', fontWeight: '600', fontSize: '13px', cursor: phase === 'running' ? 'not-allowed' : 'pointer' }}>
+            {phase === 'running' ? '실행 중...' : '▶ 동시 실행'}
+          </button>
+          <button onClick={reset} style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--ifm-color-emphasis-300)', background: 'transparent', color: 'var(--ifm-color-content-secondary)', fontSize: '13px', cursor: 'pointer' }}>↺</button>
+        </div>
+      </div>
+      <div style={body}>
+        {renderPanel(syncProg,  syncMs,  syncFinal,  syncCurIdx, true)}
+        {renderPanel(asyncProg, asyncMs, asyncFinal, 0,          false)}
+      </div>
+      {phase === 'done' && syncFinal && asyncFinal && (
+        <div style={{ margin: '0 24px 24px', padding: '14px 18px', borderRadius: '10px', background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.2)', display: 'flex', alignItems: 'center', gap: '14px' }}>
+          <span style={{ fontSize: '22px' }}>🚀</span>
+          <div>
+            <div style={{ fontWeight: '700', fontSize: '14px', color: '#10b981' }}>비동기가 {(syncFinal / asyncFinal).toFixed(1)}배 더 빠릅니다</div>
+            <div style={{ fontSize: '12px', color: 'var(--ifm-color-emphasis-500)', marginTop: '3px' }}>동기: {(syncFinal/1000).toFixed(2)}s · 비동기: {(asyncFinal/1000).toFixed(2)}s · 절약: {((syncFinal-asyncFinal)/1000).toFixed(2)}s</div>
+          </div>
+        </div>
+      )}
+      {phase === 'idle' && (
+        <div style={{ padding: '16px 24px', borderTop: '1px solid var(--ifm-color-emphasis-200)', fontSize: '13px', color: 'var(--ifm-color-emphasis-400)', textAlign: 'center' }}>
+          두 방식이 동시에 시작됩니다. 차이를 직접 눈으로 확인해보세요 →
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function JSPatternTabs() {
+  const TABS = [
+    {
+      label: 'Callback',
+      sub: 'ES5',
+      badge: '가독성 ★☆☆',
+      badgeColor: '#ef4444',
+      code: `// 콜백 지옥 — 에러 처리까지 반복하면 감당 불가
+fetchUser('/api/user', function(user) {
+  fetchOrders('/api/orders/' + user.id, function(orders) {
+    fetchDetail('/api/detail/' + orders[0].id, function(detail) {
+      render(detail);       // 실제 로직은 이 한 줄
+    }, function(err) { handleError(err); });
+  }, function(err) { handleError(err); });
+}, function(err) { handleError(err); });`,
+    },
+    {
+      label: 'Promise',
+      sub: 'ES2015',
+      badge: '가독성 ★★☆',
+      badgeColor: '#f59e0b',
+      code: `// 체이닝으로 중첩 탈출 — 콜백보다 훨씬 읽기 쉽다
+fetchUser('/api/user')
+  .then(user    => fetchOrders('/api/orders/' + user.id))
+  .then(orders  => fetchDetail('/api/detail/' + orders[0].id))
+  .then(detail  => render(detail))
+  .catch(err    => handleError(err));`,
+    },
+    {
+      label: 'async/await',
+      sub: 'ES2017',
+      badge: '가독성 ★★★',
+      badgeColor: '#10b981',
+      code: `// 동기 코드처럼 읽히는 비동기 — 현재 권장 방식
+async function loadData() {
+  try {
+    const user   = await fetchUser('/api/user');
+    const orders = await fetchOrders('/api/orders/' + user.id);
+    const detail = await fetchDetail('/api/detail/' + orders[0].id);
+    render(detail);
+  } catch (err) {
+    handleError(err);
+  }
+}`,
+    },
+  ];
+
+  const [sel, setSel] = useState(0);
+  const tab = TABS[sel];
+
+  const wrap = { margin: '24px 0', borderRadius: '14px', overflow: 'hidden', border: '1px solid var(--ifm-color-emphasis-300)' };
+  const tabBar = { display: 'flex', background: 'var(--ifm-color-emphasis-100)', borderBottom: '1px solid var(--ifm-color-emphasis-300)' };
+
+  return (
+    <div style={wrap}>
+      <div style={tabBar}>
+        {TABS.map((t, i) => (
+          <button key={i} onClick={() => setSel(i)} style={{ padding: '10px 18px', border: 'none', background: sel === i ? 'var(--ifm-background-surface-color)' : 'transparent', color: sel === i ? 'var(--ifm-color-content)' : 'var(--ifm-color-emphasis-600)', fontWeight: sel === i ? '600' : '400', fontSize: '13px', cursor: 'pointer', borderBottom: sel === i ? '2px solid #f0db4f' : '2px solid transparent', marginBottom: '-1px' }}>
+            {t.label} <span style={{ fontSize: '11px', opacity: 0.6 }}>{t.sub}</span>
+          </button>
+        ))}
+      </div>
+      <div style={{ background: 'var(--ifm-background-surface-color)', padding: '16px 20px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+          <span style={{ fontSize: '13px', color: 'var(--ifm-color-emphasis-600)' }}>{tab.label} 패턴</span>
+          <span style={{ fontSize: '11px', padding: '3px 10px', borderRadius: '99px', background: `${tab.badgeColor}20`, color: tab.badgeColor, fontWeight: '600' }}>{tab.badge}</span>
+        </div>
+        <pre style={{ background: '#0d1117', color: '#e6edf3', padding: '18px 20px', borderRadius: '10px', overflow: 'auto', fontSize: '13px', lineHeight: '1.65', margin: 0, fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace" }}>
+          <code>{tab.code}</code>
+        </pre>
+      </div>
+    </div>
+  );
+}
+
+export function JavaPatternTabs() {
+  const TABS = [
+    {
+      label: 'Thread',
+      sub: 'Java 1',
+      badge: '저수준 · 비권장',
+      badgeColor: '#6b7280',
+      code: `// 스레드를 직접 생성 — 무겁고 관리 어렵다
+Thread t = new Thread(() -> {
+    String result = fetchData(); // 이 스레드가 I/O 대기
+    System.out.println(result);
+});
+t.start();
+t.join(); // 메인 스레드도 블로킹`,
+    },
+    {
+      label: 'Future',
+      sub: 'Java 5',
+      badge: '스레드풀 도입',
+      badgeColor: '#f59e0b',
+      code: `// ExecutorService로 스레드 재사용
+ExecutorService pool = Executors.newFixedThreadPool(4);
+
+Future<String> future = pool.submit(() -> fetchData());
+
+// future.get() 호출 전까지 다른 작업 수행 가능
+doOtherWork();
+
+String result = future.get(); // 결과 요청 시 블로킹
+pool.shutdown();`,
+    },
+    {
+      label: 'CompletableFuture',
+      sub: 'Java 8',
+      badge: '비동기 체이닝',
+      badgeColor: '#3b82f6',
+      code: `// 논-블로킹 콜백 체이닝 — Promise와 유사한 구조
+CompletableFuture
+    .supplyAsync(() -> fetchUser())              // ForkJoinPool에서 실행
+    .thenApply(user   -> fetchOrders(user))
+    .thenApply(orders -> fetchDetail(orders))
+    .thenAccept(detail -> render(detail))
+    .exceptionally(err -> { err.printStackTrace(); return null; });
+
+// 여러 작업 병렬 실행 후 합치기
+CompletableFuture<String> f1 = CompletableFuture.supplyAsync(() -> fetchA());
+CompletableFuture<String> f2 = CompletableFuture.supplyAsync(() -> fetchB());
+CompletableFuture.allOf(f1, f2).thenRun(() -> merge(f1.join(), f2.join()));`,
+    },
+    {
+      label: 'Virtual Threads',
+      sub: 'Java 21',
+      badge: '최신 권장',
+      badgeColor: '#10b981',
+      code: `// 수십만 개 생성 가능 — 블로킹 코드도 효율적으로 동작
+try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
+    var f1 = pool.submit(() -> fetchUser());    // 가상 스레드에서 실행
+    var f2 = pool.submit(() -> fetchOrders());
+    var f3 = pool.submit(() -> fetchDetail());
+
+    // .get()은 블로킹이지만, OS 스레드를 점유하지 않음
+    // → 수만 개가 동시에 대기해도 메모리/성능 문제 없음
+    merge(f1.get(), f2.get(), f3.get());
+}`,
+    },
+  ];
+
+  const [sel, setSel] = useState(0);
+  const tab = TABS[sel];
+
+  const wrap = { margin: '24px 0', borderRadius: '14px', overflow: 'hidden', border: '1px solid var(--ifm-color-emphasis-300)' };
+  const tabBar = { display: 'flex', flexWrap: 'wrap', background: 'var(--ifm-color-emphasis-100)', borderBottom: '1px solid var(--ifm-color-emphasis-300)' };
+
+  return (
+    <div style={wrap}>
+      <div style={tabBar}>
+        {TABS.map((t, i) => (
+          <button key={i} onClick={() => setSel(i)} style={{ padding: '10px 18px', border: 'none', background: sel === i ? 'var(--ifm-background-surface-color)' : 'transparent', color: sel === i ? 'var(--ifm-color-content)' : 'var(--ifm-color-emphasis-600)', fontWeight: sel === i ? '600' : '400', fontSize: '13px', cursor: 'pointer', borderBottom: sel === i ? '2px solid #e76f00' : '2px solid transparent', marginBottom: '-1px' }}>
+            {t.label} <span style={{ fontSize: '11px', opacity: 0.6 }}>{t.sub}</span>
+          </button>
+        ))}
+      </div>
+      <div style={{ background: 'var(--ifm-background-surface-color)', padding: '16px 20px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+          <span style={{ fontSize: '13px', color: 'var(--ifm-color-emphasis-600)' }}>{tab.label} 패턴</span>
+          <span style={{ fontSize: '11px', padding: '3px 10px', borderRadius: '99px', background: `${tab.badgeColor}20`, color: tab.badgeColor, fontWeight: '600' }}>{tab.badge}</span>
+        </div>
+        <pre style={{ background: '#0d1117', color: '#e6edf3', padding: '18px 20px', borderRadius: '10px', overflow: 'auto', fontSize: '13px', lineHeight: '1.65', margin: 0, fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace" }}>
+          <code>{tab.code}</code>
+        </pre>
+      </div>
+    </div>
+  );
+}
+
+export function CompareTable() {
+  const rows = [
+    { aspect: '스레드 모델',     js: '싱글 스레드',                       java: '멀티 스레드 (Thread Pool)' },
+    { aspect: '비동기 메커니즘', js: 'Event Loop + Task Queue',            java: 'Thread 위임 or CompletableFuture' },
+    { aspect: 'I/O 처리',        js: 'Non-blocking (libuv, OS 위임)',       java: '기본 Blocking → Virtual Threads로 개선' },
+    { aspect: 'CPU 병렬 처리',   js: '어려움 (Worker Thread 필요)',          java: '자연스러움 (멀티 스레드)' },
+    { aspect: '동시성 단위',     js: 'Call Stack + Promise 마이크로태스크', java: 'Thread (OS or Virtual)' },
+    { aspect: '비동기 키워드',   js: 'async / await',                       java: 'CompletableFuture / @Async / Virtual Thread' },
+    { aspect: 'I/O 집약 서버',   js: '유리 (스레드 적어 메모리 효율적)',    java: 'Virtual Threads로 동등 수준 달성 (Java 21)' },
+    { aspect: 'CPU 집약 작업',   js: '취약 (Event Loop 블로킹 위험)',        java: '멀티 코어 활용 유리' },
+  ];
+
+  const wrap = { margin: '28px 0', borderRadius: '14px', overflow: 'hidden', border: '1px solid var(--ifm-color-emphasis-300)' };
+  const grid = { display: 'grid', gridTemplateColumns: '1.8fr 2.2fr 2.2fr' };
+  const cell = (bg, color, bold) => ({ padding: '11px 14px', fontSize: '13px', borderBottom: '1px solid var(--ifm-color-emphasis-200)', background: bg || 'var(--ifm-background-surface-color)', color: color || 'var(--ifm-color-content)', fontWeight: bold ? '700' : '400', lineHeight: '1.5' });
+
+  return (
+    <div style={wrap}>
+      <div style={{ ...grid }}>
+        <div style={cell('var(--ifm-color-emphasis-100)', 'var(--ifm-color-content)', true)}>구분</div>
+        <div style={cell('rgba(240,219,79,0.08)', '#f0db4f', true)}>JavaScript (Node.js)</div>
+        <div style={cell('rgba(231,111,0,0.08)', '#e76f00', true)}>Java</div>
+        {rows.flatMap((row, i) => [
+          <div key={`a${i}`} style={cell('var(--ifm-color-emphasis-100)', 'var(--ifm-color-content-secondary)', true)}>{row.aspect}</div>,
+          <div key={`b${i}`} style={cell(null, null, false)}>{row.js}</div>,
+          <div key={`c${i}`} style={cell(null, null, false)}>{row.java}</div>,
+        ])}
+      </div>
+    </div>
+  );
+}
+
+커피숍에서 주문할 때를 생각해봅시다. 카운터 앞에 서서 커피가 나올 때까지 **아무것도 못 하고 기다리는 것**이 동기, 진동벨을 받고 다른 일을 하다 벨이 울리면 가져오는 것이 비동기입니다. 같은 개념이지만 JavaScript와 Java는 이를 완전히 다른 방식으로 구현합니다.
+
+<!-- truncate -->
+
+## 1. 핵심 개념
+
+<div style={{display:'flex', gap:'16px', flexWrap:'wrap', margin:'24px 0'}}>
+  <div style={{flex:'1 1 220px', padding:'20px', borderRadius:'12px', background:'rgba(59,130,246,0.06)', border:'1px solid rgba(59,130,246,0.25)'}}>
+    <div style={{fontWeight:'700', color:'#3b82f6', marginBottom:'8px', fontSize:'15px'}}>🔵 동기 (Synchronous)</div>
+    <div style={{fontSize:'13px', lineHeight:'1.7', color:'var(--ifm-color-content-secondary)'}}>
+      작업 요청 후 <strong>응답이 올 때까지 스레드가 블로킹</strong>됩니다. 이전 작업이 끝나야 다음 작업을 시작합니다.
+    </div>
+  </div>
+  <div style={{flex:'1 1 220px', padding:'20px', borderRadius:'12px', background:'rgba(249,115,22,0.06)', border:'1px solid rgba(249,115,22,0.25)'}}>
+    <div style={{fontWeight:'700', color:'#f97316', marginBottom:'8px', fontSize:'15px'}}>🟠 비동기 (Asynchronous)</div>
+    <div style={{fontSize:'13px', lineHeight:'1.7', color:'var(--ifm-color-content-secondary)'}}>
+      작업 요청 후 <strong>응답을 기다리지 않고 즉시 다음 작업으로 진행</strong>합니다. 완료 시 콜백 / Future로 결과를 받습니다.
+    </div>
+  </div>
+</div>
+
+> **핵심 구분 기준** — I/O 대기 중에 스레드(또는 실행 흐름)가 다른 일을 할 수 있는가?
+> 비동기의 효과는 **I/O 대기(DB, 네트워크, 파일)** 에서 발생합니다. CPU-bound 작업에서는 이점이 없거나 오히려 오버헤드가 생깁니다.
+
+---
+
+## 2. 실시간 비교 시뮬레이션
+
+DB 조회(1,200ms), API 호출(1,800ms), 파일 읽기(900ms) 세 작업을 동기/비동기로 동시에 실행해봅니다.
+
+<SyncAsyncCompare />
+
+---
+
+## 3. JavaScript의 비동기 처리
+
+### Event Loop — 싱글 스레드가 비동기를 다루는 방법
+
+JavaScript는 **싱글 스레드**입니다. 그럼에도 수천 개의 동시 요청을 처리할 수 있는 이유는 **Event Loop** 덕분입니다.
+
+```
+┌─────────────────────────────────────────────────────┐
+│                  JavaScript Runtime                  │
+│                                                     │
+│  ┌──────────────┐     ┌───────────────────────────┐ │
+│  │  Call Stack  │     │    Web API (libuv / OS)   │ │
+│  │              │     │                           │ │
+│  │  render()    │────▶│  fetch('/api')  ···진행중  │ │
+│  │  main()      │     │  setTimeout()  ···진행중  │ │
+│  └──────┬───────┘     └─────────────┬─────────────┘ │
+│         │  비었을 때만               │ 완료 시        │
+│         │  꺼냄                      ▼               │
+│         │             ┌─────────────────────────┐   │
+│         └────────────▶│      Task Queue          │   │
+│           Event Loop  │  callback1, callback2…  │   │
+│                        └─────────────────────────┘   │
+└─────────────────────────────────────────────────────┘
+```
+
+- `fetch()`를 호출하면 Call Stack에서 바로 제거되고 OS에 I/O 위임
+- Call Stack이 빈 상태일 때만 Event Loop이 Task Queue에서 콜백을 꺼냄
+- 즉, **I/O 대기 중에도 Call Stack은 다른 코드를 실행**할 수 있음
+
+> ⚠️ `while(true)` 같은 CPU 연산이 오래 걸리면 Call Stack이 막혀 Event Loop 전체가 멈춥니다.
+
+### 비동기 패턴의 진화
+
+<JSPatternTabs />
+
+---
+
+## 4. Java의 비동기 처리
+
+### Thread 모델 — 멀티 스레드가 비동기를 다루는 방법
+
+Java는 기본적으로 **멀티 스레드** 모델입니다. 요청마다 별도 스레드를 할당하고, 각 스레드가 독립적으로 I/O를 처리합니다.
+
+```
+┌─────────────────────────────────────────────────────┐
+│                   Java Runtime (JVM)                 │
+│                                                     │
+│  요청 A ──▶  Thread #1 ──▶ DB 쿼리 (블로킹 대기)    │
+│  요청 B ──▶  Thread #2 ──▶ API 호출 (블로킹 대기)   │
+│  요청 C ──▶  Thread #3 ──▶ 파일 읽기 (블로킹 대기)  │
+│                                                     │
+│  각 스레드: ~1MB 스택 메모리 점유                    │
+│  10,000 동시 요청 = 10,000 스레드 = ~10GB           │
+└─────────────────────────────────────────────────────┘
+```
+
+스레드가 I/O를 기다리는 동안 **OS 스레드를 점유**합니다. 동시 접속이 많아질수록 메모리와 컨텍스트 스위칭 비용이 급증합니다. 이것이 Java가 전통적으로 비동기 처리를 도입한 이유입니다.
+
+### 비동기 패턴의 진화
+
+<JavaPatternTabs />
+
+---
+
+## 5. Java vs JavaScript — 핵심 차이
+
+<CompareTable />
+
+### 가장 중요한 차이: 동시성 단위
+
+- **JavaScript** — 하나의 스레드가 Event Loop으로 **제어권을 번갈아가며** 처리. `await`는 실제로 스레드를 멈추는 게 아니라 **함수 실행을 일시 중단**하고 제어권을 Event Loop에 반환.
+
+- **Java** — 각 작업이 **실제로 다른 OS 스레드에서 병렬 실행**. `CompletableFuture.supplyAsync()`는 별도 스레드에서 진짜 동시에 돌아감.
+
+```javascript
+// JavaScript: 싱글 스레드 내 제어권 전환
+async function main() {
+  const a = await fetchA(); // 스레드를 멈추는 게 아님
+  const b = await fetchB(); // fetchA 완료 후 실행 (직렬!)
+}
+
+// 진짜 병렬을 원하면 Promise.all
+const [a, b] = await Promise.all([fetchA(), fetchB()]);
+```
+
+```java
+// Java: 실제로 다른 스레드에서 병렬 실행
+CompletableFuture<String> fa = CompletableFuture.supplyAsync(() -> fetchA());
+CompletableFuture<String> fb = CompletableFuture.supplyAsync(() -> fetchB());
+// fa와 fb는 서로 다른 스레드에서 실제 동시 실행 중
+CompletableFuture.allOf(fa, fb).thenRun(() -> merge(fa.join(), fb.join()));
+```
+
+### Java 21 Virtual Threads — 게임 체인저
+
+Java 21의 **Virtual Threads**는 두 세계의 장점을 결합합니다.
+
+- OS 스레드 1개가 수천 개의 가상 스레드를 관리
+- 블로킹 I/O 호출 시 OS 스레드를 반납, 다른 가상 스레드에 양보
+- **기존 블로킹 코드를 그대로 사용**하면서 Node.js 수준의 동시성 달성
+
+```java
+// 기존 블로킹 코드 그대로 — Virtual Thread가 알아서 처리
+try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
+    for (int i = 0; i < 100_000; i++) {
+        pool.submit(() -> {
+            String data = jdbc.query("SELECT ...");  // 블로킹이지만 OK
+            process(data);
+        });
+    }
+}
+```
+
+---
+
+## 6. 실무 선택 가이드
+
+| 상황 | 선택 | 이유 |
+| :--- | :--- | :--- |
+| 독립적인 I/O 작업 여럿 | `CompletableFuture.allOf()` | 병렬 처리, 총 시간 = max(각 작업) |
+| 이전 결과가 다음 입력 | 동기 또는 `.thenApply()` 체인 | 순서 의존성, 병렬화 불가 |
+| Spring 메서드 단위 비동기화 | `@Async` + `@EnableAsync` | 선언형, 간결 |
+| 대규모 동시 요청 (Java 21+) | Virtual Threads | 블로킹 코드 그대로, 확장성 확보 |
+| 완전한 리액티브 시스템 | Spring WebFlux (Reactor) | 논-블로킹 I/O 전 스택 |
+| CPU 집약적 연산 | 별도 스레드풀 (ForkJoin) | I/O 없는 계산은 비동기 이점 없음 |
+
+> **정리**: JavaScript는 Event Loop으로 싱글 스레드가 비동기를 흉내내고, Java는 실제 멀티 스레드로 병렬 실행합니다.
+> Java 21 이후로는 Virtual Threads 덕분에 블로킹 코드를 유지하면서도 Node.js 수준의 I/O 동시성을 달성할 수 있습니다.

@@ -1,0 +1,460 @@
+---
+title: "WebSocket 브로드캐스트 엔진 최적화: 단일→멀티스레드로 처리량 1,622% 향상"
+date: 2026-03-31
+authors: HyungJun
+tags: [Java, Spring, 비동기]
+---
+
+import { useState, useEffect, useRef } from 'react';
+
+export function BroadcastSimulator() {
+  const SPEED = 2;
+  const SESSIONS = [
+    { name: 'User #1', ms: 600 },
+    { name: 'User #2', ms: 800 },
+    { name: 'User #3', ms: 400, isError: true },
+    { name: 'User #4', ms: 700 },
+    { name: 'User #5', ms: 500 },
+  ];
+
+  const [phase, setPhase] = useState('idle');
+  const [seqProg, setSeqProg] = useState([0, 0, 0, 0, 0]);
+  const [parProg, setParProg] = useState([0, 0, 0, 0, 0]);
+  const [seqMs, setSeqMs] = useState(0);
+  const [parMs, setParMs] = useState(0);
+  const [seqFinal, setSeqFinal] = useState(null);
+  const [parFinal, setParFinal] = useState(null);
+  const [seqStopped, setSeqStopped] = useState(false);
+  const [seqCurIdx, setSeqCurIdx] = useState(0);
+
+  const rafRef = useRef(null);
+  const startRef = useRef(0);
+  const seqIdxRef = useRef(0);
+  const seqStepRef = useRef(0);
+  const seqDoneRef = useRef(false);
+  const parDoneRef = useRef(false);
+
+  const go = () => {
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    startRef.current = 0;
+    seqIdxRef.current = 0;
+    seqStepRef.current = 0;
+    seqDoneRef.current = false;
+    parDoneRef.current = false;
+    setSeqProg([0, 0, 0, 0, 0]);
+    setParProg([0, 0, 0, 0, 0]);
+    setSeqMs(0);
+    setParMs(0);
+    setSeqFinal(null);
+    setParFinal(null);
+    setSeqStopped(false);
+    setSeqCurIdx(0);
+    setPhase('running');
+
+    const tick = (now) => {
+      if (startRef.current === 0) {
+        startRef.current = now;
+        seqStepRef.current = now;
+      }
+      const sim = (now - startRef.current) * SPEED;
+
+      if (!parDoneRef.current) {
+        const pp = SESSIONS.map((s) => Math.min(sim / s.ms, 1));
+        setParProg(pp);
+        setParMs(sim);
+        if (SESSIONS.every((s, i) => s.isError || pp[i] >= 1)) {
+          parDoneRef.current = true;
+          setParFinal(sim);
+        }
+      }
+
+      if (!seqDoneRef.current) {
+        const idx = seqIdxRef.current;
+        if (idx < SESSIONS.length) {
+          const s = SESSIONS[idx];
+          const p = Math.min(((now - seqStepRef.current) * SPEED) / s.ms, 1);
+          setSeqProg((prev) => { const n = [...prev]; n[idx] = p; return n; });
+          setSeqMs(sim);
+          if (p >= 1) {
+            if (s.isError) {
+              seqDoneRef.current = true;
+              setSeqStopped(true);
+              setSeqFinal(sim);
+            } else {
+              const next = idx + 1;
+              seqIdxRef.current = next;
+              seqStepRef.current = now;
+              setSeqCurIdx(next);
+            }
+          }
+        }
+      }
+
+      if (seqDoneRef.current && parDoneRef.current) {
+        setPhase('done');
+        return;
+      }
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+  };
+
+  const reset = () => {
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    setPhase('idle');
+    setSeqProg([0, 0, 0, 0, 0]);
+    setParProg([0, 0, 0, 0, 0]);
+    setSeqMs(0);
+    setParMs(0);
+    setSeqFinal(null);
+    setParFinal(null);
+    setSeqStopped(false);
+    setSeqCurIdx(0);
+    startRef.current = 0;
+  };
+
+  useEffect(() => () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); }, []);
+
+  const wrap = { margin: '32px 0', borderRadius: '18px', overflow: 'hidden', border: '1px solid var(--ifm-color-emphasis-300)', background: 'var(--ifm-background-surface-color)' };
+  const headerStyle = { padding: '20px 24px', borderBottom: '1px solid var(--ifm-color-emphasis-200)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' };
+  const bodyStyle = { padding: '24px', display: 'flex', gap: '16px', flexWrap: 'wrap' };
+  const seqCard = { flex: '1 1 240px', background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: '12px', padding: '18px' };
+  const parCard = { flex: '1 1 240px', background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.2)', borderRadius: '12px', padding: '18px' };
+
+  const renderPanel = (prog, ms, final, isSeq) => {
+    const accent = isSeq ? '#ef4444' : '#10b981';
+    const label = isSeq ? '기존 (forEach 순차)' : '개선 (CompletableFuture 병렬)';
+    const note = isSeq ? '세션 3 에러 → 루프 중단' : '에러 세션만 스킵, 나머지 정상 완료';
+    return (
+      <div style={isSeq ? seqCard : parCard}>
+        <div style={{ marginBottom: '18px' }}>
+          <div style={{ fontWeight: '700', fontSize: '14px', color: accent }}>{label}</div>
+          <div style={{ fontSize: '12px', color: 'var(--ifm-color-emphasis-500)', marginTop: '2px' }}>{note}</div>
+        </div>
+        {SESSIONS.map((session, i) => {
+          const p = prog[i];
+          const done = p >= 1;
+          let barFill = '#60a5fa';
+          let statusIcon = null;
+
+          if (isSeq) {
+            const active = phase === 'running' && i === seqCurIdx && !seqStopped;
+            const notReached = seqStopped && p === 0;
+            const wasError = session.isError && done;
+            if (wasError) {
+              barFill = '#ef4444';
+              statusIcon = <span style={{ color: '#ef4444', fontSize: '11px', marginLeft: '6px' }}>❌ 루프 중단</span>;
+            } else if (done) {
+              barFill = '#10b981';
+              statusIcon = <span style={{ color: '#10b981', fontSize: '11px', marginLeft: '6px' }}>✓</span>;
+            } else if (notReached) {
+              statusIcon = <span style={{ color: 'var(--ifm-color-emphasis-400)', fontSize: '11px', marginLeft: '6px' }}>유실</span>;
+            } else if (active) {
+              statusIcon = <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: barFill, display: 'inline-block', marginLeft: '6px' }} />;
+            }
+          } else {
+            const isSkipped = session.isError && done;
+            const active = phase === 'running' && p < 1 && !session.isError;
+            if (isSkipped) {
+              barFill = '#f59e0b';
+              statusIcon = <span style={{ color: '#f59e0b', fontSize: '11px', marginLeft: '6px' }}>⚠ 스킵</span>;
+            } else if (done) {
+              barFill = '#10b981';
+              statusIcon = <span style={{ color: '#10b981', fontSize: '11px', marginLeft: '6px' }}>✓</span>;
+            } else if (active) {
+              statusIcon = <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: barFill, display: 'inline-block', marginLeft: '6px' }} />;
+            }
+          }
+
+          return (
+            <div key={i} style={{ marginBottom: '14px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px', fontSize: '13px' }}>
+                <span style={{ color: 'var(--ifm-color-content)', display: 'flex', alignItems: 'center' }}>
+                  {session.name}{statusIcon}
+                </span>
+                <span style={{ fontSize: '12px', color: 'var(--ifm-color-emphasis-500)', fontVariantNumeric: 'tabular-nums' }}>{session.ms}ms</span>
+              </div>
+              <div style={{ height: '8px', background: 'var(--ifm-color-emphasis-200)', borderRadius: '4px', overflow: 'hidden' }}>
+                <div style={{ height: '100%', width: (p * 100) + '%', background: barFill, borderRadius: '4px', transition: 'width 0.03s linear' }} />
+              </div>
+            </div>
+          );
+        })}
+        <div style={{ marginTop: '18px', padding: '12px 14px', background: 'var(--ifm-color-emphasis-100)', borderRadius: '10px' }}>
+          <div style={{ fontSize: '11px', color: 'var(--ifm-color-emphasis-500)', marginBottom: '3px', letterSpacing: '0.04em' }}>
+            {final ? (isSeq && seqStopped ? '에러로 중단' : '완료') : phase === 'running' ? '경과 시간' : '대기 중'}
+          </div>
+          <div style={{ fontSize: '32px', fontWeight: '700', fontFamily: 'monospace', fontVariantNumeric: 'tabular-nums', color: final ? (isSeq && seqStopped ? '#ef4444' : '#10b981') : 'var(--ifm-color-content)', lineHeight: 1.1 }}>
+            {final ? ((final / 1000).toFixed(2) + 's') : phase === 'running' ? ((ms / 1000).toFixed(2) + 's') : '—'}
+          </div>
+          {isSeq && seqStopped && (
+            <div style={{ fontSize: '11px', color: '#ef4444', marginTop: '4px' }}>User #4, #5 메시지 유실</div>
+          )}
+          {!isSeq && final && (
+            <div style={{ fontSize: '11px', color: '#10b981', marginTop: '4px' }}>4개 세션 정상 전송 완료</div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div style={wrap}>
+      <div style={headerStyle}>
+        <div style={{ fontWeight: '700', fontSize: '15px' }}>⚡ 브로드캐스트 시뮬레이션</div>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <button
+            onClick={go}
+            disabled={phase === 'running'}
+            style={{ padding: '8px 18px', borderRadius: '8px', border: 'none', background: phase === 'running' ? 'var(--ifm-color-emphasis-300)' : 'var(--ifm-color-primary)', color: phase === 'running' ? 'var(--ifm-color-content-secondary)' : '#fff', fontWeight: '600', fontSize: '13px', cursor: phase === 'running' ? 'not-allowed' : 'pointer' }}
+          >
+            {phase === 'running' ? '실행 중...' : '▶ 시뮬레이션'}
+          </button>
+          <button
+            onClick={reset}
+            style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--ifm-color-emphasis-300)', background: 'transparent', color: 'var(--ifm-color-content-secondary)', fontSize: '13px', cursor: 'pointer' }}
+          >↺ 초기화</button>
+        </div>
+      </div>
+      <div style={bodyStyle}>
+        {renderPanel(seqProg, seqMs, seqFinal, true)}
+        {renderPanel(parProg, parMs, parFinal, false)}
+      </div>
+      {phase === 'done' && seqFinal && parFinal && (
+        <div style={{ margin: '0 24px 24px', padding: '14px 18px', borderRadius: '10px', background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.2)', display: 'flex', alignItems: 'center', gap: '14px' }}>
+          <span style={{ fontSize: '22px' }}>🚀</span>
+          <div>
+            <div style={{ fontWeight: '700', fontSize: '14px', color: '#10b981' }}>개선 버전이 {(seqFinal / parFinal).toFixed(1)}배 빠릅니다</div>
+            <div style={{ fontSize: '12px', color: 'var(--ifm-color-emphasis-500)', marginTop: '3px' }}>기존: {(seqFinal / 1000).toFixed(2)}s · 개선: {(parFinal / 1000).toFixed(2)}s · 절약: {((seqFinal - parFinal) / 1000).toFixed(2)}s</div>
+          </div>
+        </div>
+      )}
+      {phase === 'idle' && (
+        <div style={{ padding: '16px 24px', borderTop: '1px solid var(--ifm-color-emphasis-200)', fontSize: '13px', color: 'var(--ifm-color-emphasis-400)', textAlign: 'center' }}>
+          forEach 순차 처리와 CompletableFuture 병렬 처리의 차이를 직접 확인해보세요 →
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function CodeBeforeAfterTabs() {
+  const TABS = [
+    {
+      label: 'Before (forEach)',
+      badge: '결함 전파 위험',
+      badgeColor: '#ef4444',
+      code: `// 순차 브로드캐스트 — 에러 하나가 전체를 멈춘다
+for (WebSocketSession session : sessions) {
+    session.sendMessage(message); // IllegalStateException 발생 시 루프 중단
+}`,
+    },
+    {
+      label: 'After (CompletableFuture)',
+      badge: '결함 격리 완료',
+      badgeColor: '#10b981',
+      code: `// 병렬 브로드캐스트 — 결함 격리 + 비동기 처리
+List<CompletableFuture<Void>> futures = sessions.stream()
+    .map(session -> CompletableFuture.runAsync(
+        () -> safeSend(session, message), executorService))
+    .collect(Collectors.toList());
+CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+
+private void safeSend(WebSocketSession session, TextMessage message) {
+    synchronized (session) { // TEXT_PARTIAL_WRITING 방지
+        try {
+            if (session.isOpen()) session.sendMessage(message);
+        } catch (Exception e) {
+            log.warn("세션 전송 실패, 스킵: {}", session.getId());
+        }
+    }
+}`,
+    },
+  ];
+
+  const [sel, setSel] = useState(0);
+  const tab = TABS[sel];
+
+  const wrap = { margin: '24px 0', borderRadius: '14px', overflow: 'hidden', border: '1px solid var(--ifm-color-emphasis-300)' };
+  const tabBar = { display: 'flex', background: 'var(--ifm-color-emphasis-100)', borderBottom: '1px solid var(--ifm-color-emphasis-300)' };
+
+  return (
+    <div style={wrap}>
+      <div style={tabBar}>
+        {TABS.map((t, i) => (
+          <button
+            key={i}
+            onClick={() => setSel(i)}
+            style={{ padding: '10px 20px', border: 'none', background: sel === i ? 'var(--ifm-background-surface-color)' : 'transparent', color: sel === i ? 'var(--ifm-color-content)' : 'var(--ifm-color-emphasis-600)', fontWeight: sel === i ? '600' : '400', fontSize: '13px', cursor: 'pointer', borderBottom: sel === i ? ('2px solid ' + t.badgeColor) : '2px solid transparent', marginBottom: '-1px' }}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+      <div style={{ background: 'var(--ifm-background-surface-color)', padding: '16px 20px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+          <span style={{ fontSize: '13px', color: 'var(--ifm-color-emphasis-600)' }}>{tab.label}</span>
+          <span style={{ fontSize: '11px', padding: '3px 10px', borderRadius: '99px', background: tab.badgeColor + '20', color: tab.badgeColor, fontWeight: '600' }}>{tab.badge}</span>
+        </div>
+        <pre style={{ background: '#0d1117', color: '#e6edf3', padding: '18px 20px', borderRadius: '10px', overflow: 'auto', fontSize: '13px', lineHeight: '1.65', margin: 0, fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace" }}>
+          <code>{tab.code}</code>
+        </pre>
+      </div>
+    </div>
+  );
+}
+
+export function ResultDashboard() {
+  const CARDS = [
+    {
+      title: '처리 시간',
+      value: '338ms',
+      badge: '94.2% 단축',
+      badgeColor: '#10b981',
+      accent: 'rgba(16,185,129,0.08)',
+      border: 'rgba(16,185,129,0.25)',
+      detail: '5,820ms → 338ms',
+    },
+    {
+      title: '처리량',
+      value: '5,917 event/sec',
+      badge: '1,622% 향상',
+      badgeColor: '#3b82f6',
+      accent: 'rgba(59,130,246,0.08)',
+      border: 'rgba(59,130,246,0.25)',
+      detail: '344 → 5,917 event/sec',
+    },
+    {
+      title: '메시지 유실율',
+      value: '0%',
+      badge: '9,000+ 이벤트 기준',
+      badgeColor: '#f59e0b',
+      accent: 'rgba(245,158,11,0.08)',
+      border: 'rgba(245,158,11,0.25)',
+      detail: '50명 동시 접속 · 9,000+ 이벤트',
+    },
+  ];
+
+  return (
+    <div style={{ margin: '32px 0', display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
+      {CARDS.map((card, i) => (
+        <div
+          key={i}
+          style={{ flex: '1 1 200px', background: card.accent, border: ('1px solid ' + card.border), borderRadius: '14px', padding: '20px' }}
+        >
+          <div style={{ fontSize: '11px', color: 'var(--ifm-color-emphasis-500)', fontWeight: '600', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: '10px' }}>
+            {card.title}
+          </div>
+          <div style={{ fontSize: '26px', fontWeight: '700', color: 'var(--ifm-color-content)', lineHeight: 1.1, marginBottom: '10px', fontVariantNumeric: 'tabular-nums' }}>
+            {card.value}
+          </div>
+          <span style={{ fontSize: '11px', padding: '3px 10px', borderRadius: '99px', background: card.badgeColor + '20', color: card.badgeColor, fontWeight: '700' }}>
+            {card.badge}
+          </span>
+          <div style={{ marginTop: '14px', paddingTop: '12px', borderTop: '1px solid var(--ifm-color-emphasis-200)', fontSize: '12px', color: 'var(--ifm-color-emphasis-500)' }}>
+            {card.detail}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+50명이 동시에 채팅방에 메시지를 보내는 순간, 네트워크가 느린 유저 한 명이 전체 채팅방을 멈출 수 있습니다.
+`forEach` 한 줄이 만들어낸 병목과 그로 인한 메시지 유실까지, 문제를 구조적으로 해결한 과정을 공유합니다.
+
+<!-- truncate -->
+
+## 1. 핵심 개념
+
+<div style={{display:'flex', gap:'16px', flexWrap:'wrap', margin:'24px 0'}}>
+  <div style={{flex:'1 1 220px', padding:'20px', borderRadius:'12px', background:'rgba(59,130,246,0.06)', border:'1px solid rgba(59,130,246,0.25)'}}>
+    <div style={{fontWeight:'700', color:'#3b82f6', marginBottom:'8px', fontSize:'15px'}}>🔵 Head-of-Line (HoL) Blocking</div>
+    <div style={{fontSize:'13px', lineHeight:'1.7', color:'var(--ifm-color-content-secondary)'}}>
+      큐의 <strong>맨 앞 항목이 블로킹되면 뒤의 모든 항목이 대기</strong>하는 현상. WebSocket 브로드캐스트에서는 네트워크가 느린 세션 하나가 forEach 루프 전체를 잡아둡니다.
+    </div>
+  </div>
+  <div style={{flex:'1 1 220px', padding:'20px', borderRadius:'12px', background:'rgba(239,68,68,0.06)', border:'1px solid rgba(239,68,68,0.25)'}}>
+    <div style={{fontWeight:'700', color:'#ef4444', marginBottom:'8px', fontSize:'15px'}}>🔴 Fault Propagation (결함 전파)</div>
+    <div style={{fontSize:'13px', lineHeight:'1.7', color:'var(--ifm-color-content-secondary)'}}>
+      <strong>하나의 예외가 전체 처리 흐름을 중단</strong>시키는 현상. 특정 세션에서 `IllegalStateException`이 터지면 나머지 정상 세션들도 메시지를 받지 못합니다.
+    </div>
+  </div>
+</div>
+
+> **핵심 문제** — `forEach`는 I/O 작업(네트워크 전송)을 순차로 묶는다. 세션이 50개라면 49번째 세션은 앞의 48개 전송이 완료될 때까지 기다린다.
+
+---
+
+## 2. 문제 상황 시뮬레이션
+
+User #3 세션에서 `IllegalStateException`이 발생하는 순간 forEach 루프가 중단됩니다. User #4, #5의 메시지는 유실됩니다.
+
+<BroadcastSimulator />
+
+---
+
+## 3. 원인 분석: forEach 순차 브로드캐스트의 구조적 한계
+
+### HoL Blocking — 느린 세션이 전체를 잡는다
+
+- **`session.sendMessage()`** 는 소켓 버퍼에 쓰는 I/O 블로킹 호출
+- 네트워크 지연이 큰 세션은 수백 ms 동안 루프를 점유
+- 50개 세션이면 마지막 세션은 최악의 경우 `전체 세션 지연의 합`만큼 대기
+
+### Fault Propagation — 에러 하나가 나머지를 죽인다
+
+- 세션이 이미 닫혔거나 쓰기 충돌 시 `IllegalStateException` 발생
+- try-catch 없이 루프를 돌면 **예외 발생 지점에서 루프 즉시 종료**
+
+```
+세션 1 ──▶ 전송 완료 ✓
+세션 2 ──▶ 전송 완료 ✓
+세션 3 ──▶ ❌ IllegalStateException
+              ↓
+         루프 중단!
+세션 4  ─ ─ ─ 전송 안됨 (유실)
+세션 5  ─ ─ ─ 전송 안됨 (유실)
+```
+
+> `forEach`의 문제는 코드 한 줄이 아니라 **I/O 순서를 보장하는 구조 자체**다. 세션 수가 늘수록 지연은 선형으로 누적된다.
+
+---
+
+## 4. 해결 과정
+
+<CodeBeforeAfterTabs />
+
+### `synchronized(session)`이 필요한 이유
+
+단순히 `CompletableFuture.runAsync()`로 병렬화만 해서는 안 됩니다. **같은 세션 객체에 여러 스레드가 동시에 `sendMessage()`를 호출**하면 `TEXT_PARTIAL_WRITING` 에러가 발생합니다.
+
+- **모니터 락**: `synchronized(session)`은 해당 세션 객체를 모니터로 삼아 동시 쓰기를 직렬화
+- **세션별 격리**: 세션 A의 락과 세션 B의 락은 독립 → 서로 다른 세션 간 병렬성은 유지
+- **`ForkJoinPool`**: `CompletableFuture.runAsync()`의 기본 실행자. 전용 `ExecutorService`를 주입하면 스레드 수를 세션 규모에 맞게 튜닝 가능
+
+**추가 적용 사항:**
+
+- **버퍼 튜닝**: WebSocket 송신 버퍼 512KB + 타임아웃 설정으로 느린 클라이언트로 인한 버퍼 포화 방지
+- **타임스탬프 표준화**: 프론트-백엔드 파싱 오류 원인이었던 타임스탬프를 전 메시지 ISO 8601로 통일
+
+---
+
+## 5. 정량 성과 (50명 동시 접속 기준)
+
+<ResultDashboard />
+
+---
+
+## 6. 실무 선택 가이드
+
+| 상황 | 패턴 | 이유 |
+|------|------|------|
+| 세션 5개 이하, 단순 알림 | `forEach` 유지 | 병렬화 오버헤드가 이득보다 큼 |
+| 세션 10개 이상, 채팅·실시간 이벤트 | `CompletableFuture` + 전용 `ExecutorService` | HoL Blocking 원천 차단, 처리량 선형 확장 |
+| Java 21+ 환경, 간단한 적용 필요 | Virtual Threads (`newVirtualThreadPerTaskExecutor`) | 스레드풀 튜닝 없이 동등 효과, 코드 단순 |
+| 전송 순서 보장이 필수인 경우 | `forEach` 또는 단일 스레드 큐 | 병렬 처리 시 전송 순서 비결정적 |
+| 느린 클라이언트 혼재 (이기종 환경) | `CompletableFuture` + 세션별 타임아웃 | 특정 클라이언트 지연이 전체 성능에 영향 없음 |
+| 예외 발생 시 전체 롤백이 필요한 경우 | `forEach` + 트랜잭션 관리 | 병렬 환경에서 원자적 일관성 보장 어려움 |
+
+> **언제 이 패턴을 적용할 것인가** — 세션이 10개를 넘고 네트워크 이질성이 있다면 `CompletableFuture` + `synchronized(session)` 조합은 즉시 도입할 수 있다. `safeSend()`로 예외 범위를 세션 단위로 좁히고, `allOf().join()`으로 전체 완료를 보장하는 이 패턴은 **결함 격리와 병렬성을 동시에 얻는 최소 비용의 선택**이다.

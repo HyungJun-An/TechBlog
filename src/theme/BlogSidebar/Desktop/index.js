@@ -18,6 +18,7 @@ const CATEGORIES = [
       {label: 'Generic', to: '/blog/tags/generic'},
       {label: 'JDBC / DB', to: '/blog/tags/jdbc'},
       {label: 'Web 기초', to: '/blog/tags/web'},
+      {label: '비동기', to: '/blog/tags/async'},
     ],
   },
   {
