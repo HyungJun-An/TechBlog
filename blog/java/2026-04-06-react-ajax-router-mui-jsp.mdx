@@ -1,0 +1,776 @@
+---
+title: "리액트 AJAX, 라우터, MUI, JSP 스크래핑"
+date: 2026-04-06
+authors: HyungJun
+tags: [Web, React]
+---
+
+import { useState, useEffect, useRef } from 'react';
+
+export function FetchFlowViz() {
+  const STEPS = [
+    { id: 0, label: '① 폼 입력',         sub: 'firstName, lastName, email',              icon: '📝', color: '#3b82f6' },
+    { id: 1, label: '② fetch 호출',       sub: 'method: POST, headers 설정',             icon: '📡', color: '#8b5cf6' },
+    { id: 2, label: '③ JSON 직렬화',      sub: 'JSON.stringify(body)',                   icon: '🔄', color: '#f59e0b' },
+    { id: 3, label: '④ HTTP 요청 전송',   sub: 'Content-Type: application/json',         icon: '🚀', color: '#06b6d4' },
+    { id: 4, label: '⑤ 스프링 수신',      sub: '@RequestBody FormRequest req',           icon: '🌿', color: '#10b981' },
+    { id: 5, label: '⑥ JSON 응답',        sub: 'ResponseEntity.ok(response)',            icon: '📦', color: '#10b981' },
+    { id: 6, label: '⑦ res.json() 파싱', sub: '.then(res => res.json())',               icon: '✅', color: '#3b82f6' },
+  ];
+
+  const [active, setActive] = useState(-1);
+  const [running, setRunning] = useState(false);
+  const timerRef = useRef(null);
+
+  const run = () => {
+    setActive(-1);
+    setRunning(true);
+    let i = 0;
+    const next = () => {
+      setActive(i);
+      i++;
+      if (i < STEPS.length) timerRef.current = setTimeout(next, 700);
+      else setRunning(false);
+    };
+    timerRef.current = setTimeout(next, 300);
+  };
+
+  const reset = () => {
+    clearTimeout(timerRef.current);
+    setActive(-1);
+    setRunning(false);
+  };
+
+  useEffect(() => () => clearTimeout(timerRef.current), []);
+
+  const wrap = { margin: '32px 0', borderRadius: '18px', overflow: 'hidden', border: '1px solid var(--ifm-color-emphasis-300)', background: 'var(--ifm-background-surface-color)' };
+  const header = { padding: '18px 24px', borderBottom: '1px solid var(--ifm-color-emphasis-200)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' };
+
+  return (
+    <div style={wrap}>
+      <div style={header}>
+        <div style={{ fontWeight: '700', fontSize: '15px' }}>🔁 fetch POST 전체 흐름</div>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <button onClick={run} disabled={running} style={{ padding: '7px 16px', borderRadius: '8px', border: 'none', background: running ? 'var(--ifm-color-emphasis-300)' : 'var(--ifm-color-primary)', color: running ? 'var(--ifm-color-content-secondary)' : '#fff', fontWeight: '600', fontSize: '13px', cursor: running ? 'not-allowed' : 'pointer' }}>
+            {running ? '진행 중...' : '▶ 실행'}
+          </button>
+          <button onClick={reset} style={{ padding: '7px 12px', borderRadius: '8px', border: '1px solid var(--ifm-color-emphasis-300)', background: 'transparent', color: 'var(--ifm-color-content-secondary)', fontSize: '13px', cursor: 'pointer' }}>↺</button>
+        </div>
+      </div>
+      <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+        {STEPS.map((step, i) => {
+          const isPast   = i < active;
+          const isCurrent = i === active;
+          const opacity  = active === -1 ? 0.5 : (isPast || isCurrent ? 1 : 0.3);
+          const bg       = isCurrent ? `${step.color}18` : isPast ? 'rgba(16,185,129,0.06)' : 'var(--ifm-color-emphasis-100)';
+          const border   = isCurrent ? `1.5px solid ${step.color}` : isPast ? '1.5px solid rgba(16,185,129,0.35)' : '1.5px solid var(--ifm-color-emphasis-200)';
+          return (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '12px 16px', borderRadius: '10px', background: bg, border, opacity, transition: 'all 0.3s ease' }}>
+              <span style={{ fontSize: '20px', minWidth: '28px', textAlign: 'center' }}>{isPast ? '✅' : step.icon}</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: '600', fontSize: '13px', color: isCurrent ? step.color : isPast ? '#10b981' : 'var(--ifm-color-content)' }}>{step.label}</div>
+                <div style={{ fontSize: '11px', color: 'var(--ifm-color-emphasis-500)', marginTop: '2px', fontFamily: 'monospace' }}>{step.sub}</div>
+              </div>
+              {isCurrent && (
+                <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: step.color, boxShadow: `0 0 8px ${step.color}` }} />
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {active === -1 && (
+        <div style={{ padding: '14px 24px', borderTop: '1px solid var(--ifm-color-emphasis-200)', fontSize: '13px', color: 'var(--ifm-color-emphasis-400)', textAlign: 'center' }}>
+          ▶ 실행을 눌러 리액트 → 스프링부트 POST 흐름을 단계별로 확인하세요
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function CORSExplainer() {
+  const [corsOn, setCorsOn] = useState(false);
+  const [sent, setSent]   = useState(false);
+  const [result, setResult] = useState(null);
+
+  const send = () => {
+    setSent(true);
+    setResult(null);
+    setTimeout(() => {
+      setResult(corsOn ? 'ok' : 'error');
+    }, 900);
+  };
+
+  const reset = () => { setSent(false); setResult(null); };
+
+  const wrap = { margin: '32px 0', borderRadius: '18px', overflow: 'hidden', border: '1px solid var(--ifm-color-emphasis-300)', background: 'var(--ifm-background-surface-color)' };
+  const header = { padding: '18px 24px', borderBottom: '1px solid var(--ifm-color-emphasis-200)', fontWeight: '700', fontSize: '15px' };
+
+  const Box = ({ label, port, color }) => (
+    <div style={{ flex: '1 1 140px', padding: '16px', borderRadius: '12px', background: `${color}10`, border: `1.5px solid ${color}40`, textAlign: 'center' }}>
+      <div style={{ fontSize: '22px', marginBottom: '6px' }}>🖥️</div>
+      <div style={{ fontWeight: '700', fontSize: '13px', color }}>{label}</div>
+      <div style={{ fontSize: '11px', color: 'var(--ifm-color-emphasis-500)', marginTop: '3px', fontFamily: 'monospace' }}>localhost:{port}</div>
+    </div>
+  );
+
+  return (
+    <div style={wrap}>
+      <div style={header}>🚧 CORS 오류 시뮬레이션</div>
+      <div style={{ padding: '24px' }}>
+        <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center', marginBottom: '20px' }}>
+          <Box label="React Dev" port="5173" color="#3b82f6" />
+          <div style={{ textAlign: 'center', minWidth: '60px' }}>
+            {!sent && <div style={{ fontSize: '11px', color: 'var(--ifm-color-emphasis-400)' }}>POST →</div>}
+            {sent && result === null && <div style={{ fontSize: '20px' }}>⏳</div>}
+            {result === 'ok'    && <div style={{ fontSize: '20px' }}>✅</div>}
+            {result === 'error' && <div style={{ fontSize: '20px' }}>❌</div>}
+          </div>
+          <Box label="Spring Boot" port="8080" color="#10b981" />
+        </div>
+
+        <div style={{ marginBottom: '16px', padding: '14px 16px', borderRadius: '10px', background: 'var(--ifm-color-emphasis-100)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <div style={{ fontWeight: '600', fontSize: '13px' }}>@CrossOrigin 설정</div>
+            <div style={{ fontSize: '11px', color: 'var(--ifm-color-emphasis-500)', marginTop: '2px', fontFamily: 'monospace' }}>origins = "http://localhost:5173"</div>
+          </div>
+          <button onClick={() => { setCorsOn(v => !v); reset(); }} style={{ padding: '6px 16px', borderRadius: '20px', border: 'none', background: corsOn ? '#10b981' : '#ef4444', color: '#fff', fontWeight: '700', fontSize: '12px', cursor: 'pointer', transition: 'background 0.2s' }}>
+            {corsOn ? 'ON' : 'OFF'}
+          </button>
+        </div>
+
+        {result === 'error' && (
+          <div style={{ marginBottom: '12px', padding: '12px 14px', borderRadius: '8px', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)', fontSize: '12px', fontFamily: 'monospace', color: '#ef4444' }}>
+            Access to fetch at 'http://localhost:8080/api/form' from origin 'http://localhost:5173' has been blocked by CORS policy
+          </div>
+        )}
+        {result === 'ok' && (
+          <div style={{ marginBottom: '12px', padding: '12px 14px', borderRadius: '8px', background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.3)', fontSize: '13px', color: '#10b981', fontWeight: '600' }}>
+            200 OK — 서버 응답 수신 성공 🎉
+          </div>
+        )}
+
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <button onClick={send} disabled={sent && result === null} style={{ flex: 1, padding: '10px', borderRadius: '8px', border: 'none', background: 'var(--ifm-color-primary)', color: '#fff', fontWeight: '600', fontSize: '13px', cursor: 'pointer' }}>
+            POST 요청 전송
+          </button>
+          <button onClick={reset} style={{ padding: '10px 14px', borderRadius: '8px', border: '1px solid var(--ifm-color-emphasis-300)', background: 'transparent', color: 'var(--ifm-color-content-secondary)', fontSize: '13px', cursor: 'pointer' }}>↺</button>
+        </div>
+
+        <div style={{ marginTop: '16px', padding: '12px 14px', borderRadius: '8px', background: 'var(--ifm-color-emphasis-100)', fontSize: '12px', color: 'var(--ifm-color-emphasis-600)', lineHeight: '1.7' }}>
+          <strong>CORS란?</strong> 브라우저가 <em>출처(Origin = 프로토콜+도메인+포트)</em>가 다른 서버에 요청할 때 서버 허가 없이 차단하는 보안 정책입니다.<br />
+          리액트(:5173)와 스프링(:8080)은 포트가 달라 <strong>다른 출처</strong>로 간주됩니다.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function FormPatternTabs() {
+  const TABS = [
+    {
+      label: '필드별 useState',
+      badge: '독립 필드에 적합',
+      badgeColor: '#3b82f6',
+      code: `// 각 필드를 독립적인 상태로 관리
+const [firstName, setFirstName] = useState("");
+const [lastName,  setLastName]  = useState("");
+const [email,     setEmail]     = useState("");
+
+// 각 input에 개별 setter 연결
+<input value={firstName} onChange={(e) => setFirstName(e.target.value)} />
+<input value={lastName}  onChange={(e) => setLastName(e.target.value)} />
+<input value={email}     onChange={(e) => setEmail(e.target.value)} />`,
+      pros: ['핸들러 로직이 직관적', '필드별 검증 분리 용이'],
+      cons: ['필드가 많아지면 코드 반복'],
+    },
+    {
+      label: '객체 useState',
+      badge: '연관 필드에 적합',
+      badgeColor: '#10b981',
+      code: `// 연관 필드를 하나의 객체로 관리
+const [form, setForm] = useState({ firstName: "", lastName: "", email: "" });
+
+// name 속성 + 스프레드로 단일 핸들러 처리
+const handleChange = (e) =>
+  setForm({ ...form, [e.target.name]: e.target.value });
+
+// 모든 input이 하나의 핸들러 공유
+<input name="firstName" value={form.firstName} onChange={handleChange} />
+<input name="lastName"  value={form.lastName}  onChange={handleChange} />
+<input name="email"     value={form.email}     onChange={handleChange} />`,
+      pros: ['단일 핸들러로 코드 압축', 'API 전송 시 그대로 사용'],
+      cons: ['스프레드 갱신 패턴 이해 필요'],
+    },
+  ];
+
+  const [sel, setSel] = useState(0);
+  const tab = TABS[sel];
+
+  const wrap = { margin: '24px 0', borderRadius: '14px', overflow: 'hidden', border: '1px solid var(--ifm-color-emphasis-300)' };
+  const tabBar = { display: 'flex', background: 'var(--ifm-color-emphasis-100)', borderBottom: '1px solid var(--ifm-color-emphasis-300)' };
+
+  return (
+    <div style={wrap}>
+      <div style={tabBar}>
+        {TABS.map((t, i) => (
+          <button key={i} onClick={() => setSel(i)} style={{ padding: '10px 18px', border: 'none', background: sel === i ? 'var(--ifm-background-surface-color)' : 'transparent', color: sel === i ? 'var(--ifm-color-content)' : 'var(--ifm-color-emphasis-600)', fontWeight: sel === i ? '600' : '400', fontSize: '13px', cursor: 'pointer', borderBottom: sel === i ? '2px solid #3b82f6' : '2px solid transparent', marginBottom: '-1px' }}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+      <div style={{ background: 'var(--ifm-background-surface-color)', padding: '16px 20px' }}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '10px' }}>
+          <span style={{ fontSize: '11px', padding: '3px 10px', borderRadius: '99px', background: `${tab.badgeColor}20`, color: tab.badgeColor, fontWeight: '600' }}>{tab.badge}</span>
+        </div>
+        <pre style={{ background: '#0d1117', color: '#e6edf3', padding: '18px 20px', borderRadius: '10px', overflow: 'auto', fontSize: '13px', lineHeight: '1.65', margin: 0, fontFamily: "'JetBrains Mono','Fira Code',monospace" }}>
+          <code>{tab.code}</code>
+        </pre>
+        <div style={{ display: 'flex', gap: '12px', marginTop: '14px', flexWrap: 'wrap' }}>
+          <div style={{ flex: '1 1 140px', padding: '12px 14px', borderRadius: '8px', background: 'rgba(16,185,129,0.07)', border: '1px solid rgba(16,185,129,0.2)' }}>
+            <div style={{ fontSize: '11px', fontWeight: '700', color: '#10b981', marginBottom: '6px' }}>장점</div>
+            {tab.pros.map((p, i) => <div key={i} style={{ fontSize: '12px', color: 'var(--ifm-color-content-secondary)', lineHeight: '1.6' }}>• {p}</div>)}
+          </div>
+          <div style={{ flex: '1 1 140px', padding: '12px 14px', borderRadius: '8px', background: 'rgba(239,68,68,0.07)', border: '1px solid rgba(239,68,68,0.2)' }}>
+            <div style={{ fontSize: '11px', fontWeight: '700', color: '#ef4444', marginBottom: '6px' }}>단점</div>
+            {tab.cons.map((c, i) => <div key={i} style={{ fontSize: '12px', color: 'var(--ifm-color-content-secondary)', lineHeight: '1.6' }}>• {c}</div>)}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function RouterViz() {
+  const [mode, setMode]   = useState('spa');
+  const [page, setPage]   = useState('home');
+  const [loading, setLoading] = useState(false);
+  const [reloadFlash, setReloadFlash] = useState(false);
+  const [navCount, setNavCount] = useState(0);
+
+  const PAGES = {
+    home:      { label: 'Home',    icon: '🏠', color: '#3b82f6', content: 'Welcome! 메인 화면입니다.' },
+    about:     { label: 'About',   icon: '👤', color: '#8b5cf6', content: '소개 페이지입니다.' },
+    container: { label: 'Items',   icon: '📦', color: '#f59e0b', content: '상품 목록 페이지입니다.' },
+  };
+
+  const navigate = (to) => {
+    if (to === page) return;
+    setNavCount(c => c + 1);
+    if (mode === 'reload') {
+      setLoading(true);
+      setReloadFlash(true);
+      setTimeout(() => setReloadFlash(false), 150);
+      setTimeout(() => { setLoading(false); setPage(to); }, 900);
+    } else {
+      setPage(to);
+    }
+  };
+
+  const wrap = { margin: '32px 0', borderRadius: '18px', overflow: 'hidden', border: '1px solid var(--ifm-color-emphasis-300)', background: 'var(--ifm-background-surface-color)' };
+  const header = { padding: '18px 24px', borderBottom: '1px solid var(--ifm-color-emphasis-200)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' };
+  const navItem = (key) => ({
+    padding: '7px 14px', borderRadius: '7px', border: 'none', cursor: 'pointer', fontSize: '13px', fontWeight: page === key ? '600' : '400',
+    background: page === key ? `${PAGES[key].color}18` : 'transparent',
+    color: page === key ? PAGES[key].color : 'var(--ifm-color-emphasis-600)',
+  });
+
+  return (
+    <div style={wrap}>
+      <div style={header}>
+        <div style={{ fontWeight: '700', fontSize: '15px' }}>🗺️ SPA 라우팅 vs 전통 방식</div>
+        <div style={{ display: 'flex', gap: '6px' }}>
+          {[['spa', 'SPA (Link)'], ['reload', '전통 방식']].map(([val, label]) => (
+            <button key={val} onClick={() => { setMode(val); setPage('home'); setNavCount(0); }}
+              style={{ padding: '6px 14px', borderRadius: '8px', border: '1px solid var(--ifm-color-emphasis-300)', background: mode === val ? 'var(--ifm-color-primary)' : 'transparent', color: mode === val ? '#fff' : 'var(--ifm-color-content-secondary)', fontWeight: '600', fontSize: '12px', cursor: 'pointer' }}>
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ padding: '20px 24px' }}>
+        <div style={{ padding: '10px 12px', background: 'var(--ifm-color-emphasis-100)', borderRadius: '10px', marginBottom: '16px', display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <span style={{ fontSize: '11px', color: 'var(--ifm-color-emphasis-500)', fontFamily: 'monospace' }}>🔗 localhost:5173/{page === 'home' ? '' : page}</span>
+        </div>
+
+        <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
+          {Object.entries(PAGES).map(([key, val]) => (
+            <button key={key} onClick={() => navigate(key)} disabled={loading}
+              style={{ ...navItem(key), transition: 'all 0.2s' }}>
+              {val.icon} {val.label}
+            </button>
+          ))}
+        </div>
+
+        <div style={{ minHeight: '80px', padding: '20px', borderRadius: '10px', background: reloadFlash ? '#000' : `${PAGES[page].color}08`, border: `1.5px solid ${PAGES[page].color}30`, transition: 'background 0.1s', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          {loading
+            ? <div style={{ color: 'var(--ifm-color-emphasis-400)', fontSize: '13px' }}>⏳ 페이지 전체 로딩 중...</div>
+            : <div style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: '28px', marginBottom: '6px' }}>{PAGES[page].icon}</div>
+                <div style={{ fontWeight: '600', color: PAGES[page].color }}>{PAGES[page].label}</div>
+                <div style={{ fontSize: '12px', color: 'var(--ifm-color-emphasis-500)', marginTop: '4px' }}>{PAGES[page].content}</div>
+              </div>
+          }
+        </div>
+
+        <div style={{ marginTop: '14px', display: 'flex', gap: '10px' }}>
+          <div style={{ flex: 1, padding: '10px 14px', borderRadius: '8px', background: mode === 'spa' ? 'rgba(16,185,129,0.08)' : 'var(--ifm-color-emphasis-100)', border: mode === 'spa' ? '1px solid rgba(16,185,129,0.3)' : '1px solid var(--ifm-color-emphasis-200)', fontSize: '12px' }}>
+            <div style={{ fontWeight: '700', color: '#10b981', marginBottom: '4px' }}>SPA — React Router</div>
+            <div style={{ color: 'var(--ifm-color-emphasis-600)' }}>HTML/JS 재다운로드 없이 컴포넌트만 교체. 이동 횟수: <strong>{mode === 'spa' ? navCount : 0}</strong></div>
+          </div>
+          <div style={{ flex: 1, padding: '10px 14px', borderRadius: '8px', background: mode === 'reload' ? 'rgba(239,68,68,0.07)' : 'var(--ifm-color-emphasis-100)', border: mode === 'reload' ? '1px solid rgba(239,68,68,0.2)' : '1px solid var(--ifm-color-emphasis-200)', fontSize: '12px' }}>
+            <div style={{ fontWeight: '700', color: '#ef4444', marginBottom: '4px' }}>전통 방식 — 전체 리로드</div>
+            <div style={{ color: 'var(--ifm-color-emphasis-600)' }}>페이지마다 HTML 전체 재요청. 이동 횟수: <strong>{mode === 'reload' ? navCount : 0}</strong></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function MUIListDemo() {
+  const [items, setItems]     = useState([{ product: '아메리카노', amount: '2' }, { product: '라떼', amount: '1' }]);
+  const [open, setOpen]       = useState(false);
+  const [form, setForm]       = useState({ product: '', amount: '' });
+  const [removed, setRemoved] = useState(null);
+
+  const handleChange = (e) => setForm({ ...form, [e.target.name]: e.target.value });
+
+  const addItem = () => {
+    if (!form.product || !form.amount) return;
+    setItems(prev => [...prev, { ...form }]);
+    setOpen(false);
+    setForm({ product: '', amount: '' });
+  };
+
+  const removeItem = (idx) => {
+    setRemoved(idx);
+    setTimeout(() => {
+      setItems(prev => prev.filter((_, i) => i !== idx));
+      setRemoved(null);
+    }, 300);
+  };
+
+  const wrap = { margin: '32px 0', borderRadius: '18px', overflow: 'hidden', border: '1px solid var(--ifm-color-emphasis-300)', background: 'var(--ifm-background-surface-color)' };
+  const header = { padding: '16px 20px', background: '#1976d2', display: 'flex', justifyContent: 'space-between', alignItems: 'center' };
+
+  const inputStyle = { width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid var(--ifm-color-emphasis-300)', background: 'var(--ifm-background-surface-color)', color: 'var(--ifm-color-content)', fontSize: '14px', boxSizing: 'border-box', outline: 'none', marginBottom: '10px' };
+
+  return (
+    <div style={wrap}>
+      <div style={header}>
+        <span style={{ color: '#fff', fontWeight: '700', fontSize: '15px' }}>🛒 MUI 리스트 추가/삭제 시뮬레이션</span>
+        <button onClick={() => setOpen(true)} style={{ padding: '6px 14px', borderRadius: '6px', border: 'none', background: '#fff', color: '#1976d2', fontWeight: '700', fontSize: '13px', cursor: 'pointer' }}>+ 추가</button>
+      </div>
+
+      <div style={{ padding: '12px 16px' }}>
+        {items.length === 0 && (
+          <div style={{ padding: '28px', textAlign: 'center', color: 'var(--ifm-color-emphasis-400)', fontSize: '13px' }}>목록이 비었습니다</div>
+        )}
+        {items.map((item, idx) => (
+          <div key={idx} style={{ display: 'flex', alignItems: 'center', padding: '12px 14px', borderRadius: '10px', marginBottom: '8px', background: removed === idx ? 'rgba(239,68,68,0.08)' : 'var(--ifm-color-emphasis-100)', border: removed === idx ? '1px solid rgba(239,68,68,0.3)' : '1px solid var(--ifm-color-emphasis-200)', transition: 'all 0.3s', opacity: removed === idx ? 0.4 : 1 }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: '600', fontSize: '14px' }}>{item.product}</div>
+              <div style={{ fontSize: '12px', color: 'var(--ifm-color-emphasis-500)', marginTop: '2px' }}>{item.amount}개</div>
+            </div>
+            <button onClick={() => removeItem(idx)} style={{ padding: '5px 12px', borderRadius: '6px', border: '1px solid rgba(239,68,68,0.4)', background: 'transparent', color: '#ef4444', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>삭제</button>
+          </div>
+        ))}
+      </div>
+
+      {open && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
+          <div style={{ background: 'var(--ifm-background-surface-color)', borderRadius: '14px', padding: '24px', minWidth: '280px', maxWidth: '360px', width: '90%', border: '1px solid var(--ifm-color-emphasis-300)' }}>
+            <div style={{ fontWeight: '700', fontSize: '16px', marginBottom: '16px' }}>상품 추가</div>
+            <input name="product" placeholder="상품명" value={form.product} onChange={handleChange} style={inputStyle} />
+            <input name="amount"  placeholder="수량"   value={form.amount}  onChange={handleChange} style={inputStyle} />
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '4px' }}>
+              <button onClick={() => { setOpen(false); setForm({ product: '', amount: '' }); }} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid var(--ifm-color-emphasis-300)', background: 'transparent', color: 'var(--ifm-color-content-secondary)', cursor: 'pointer', fontSize: '13px' }}>취소</button>
+              <button onClick={addItem} style={{ padding: '8px 16px', borderRadius: '8px', border: 'none', background: '#1976d2', color: '#fff', fontWeight: '600', cursor: 'pointer', fontSize: '13px' }}>등록</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div style={{ padding: '12px 16px', borderTop: '1px solid var(--ifm-color-emphasis-200)', fontSize: '11px', color: 'var(--ifm-color-emphasis-400)' }}>
+        ↑ MUI AppBar + Dialog + TextField + List 조합으로 구성한 CRUD UI — 직접 추가/삭제해보세요
+      </div>
+    </div>
+  );
+}
+
+export function ScrapingFlow() {
+  const STEPS = [
+    { icon: '👤', label: '사용자 선택',    sub: 'request.getParameter("title")',        color: '#3b82f6', side: 'servlet' },
+    { icon: '🔗', label: 'URL 구성',        sub: '"https://comic.naver.com/..." + id', color: '#8b5cf6', side: 'servlet' },
+    { icon: '📥', label: 'Jsoup.connect()', sub: 'Jsoup.connect(url).get() → Document', color: '#f59e0b', side: 'jsoup'   },
+    { icon: '🔍', label: 'DOM 탐색',        sub: 'doc.select("#comic_view_area img")',  color: '#f59e0b', side: 'jsoup'   },
+    { icon: '📋', label: '이미지 URL 수집', sub: 'elements → List<String>',            color: '#10b981', side: 'servlet' },
+    { icon: '📨', label: 'JSP로 포워드',    sub: 'setAttribute + forward()',           color: '#10b981', side: 'servlet' },
+    { icon: '🖼️', label: 'JSP 렌더링',      sub: '<% for(src : images) %> → <img>',   color: '#06b6d4', side: 'jsp'     },
+  ];
+
+  const [active, setActive] = useState(-1);
+  const [running, setRunning] = useState(false);
+  const timerRef = useRef(null);
+
+  const run = () => {
+    setActive(-1);
+    setRunning(true);
+    let i = 0;
+    const next = () => {
+      setActive(i);
+      i++;
+      if (i < STEPS.length) timerRef.current = setTimeout(next, 600);
+      else setRunning(false);
+    };
+    timerRef.current = setTimeout(next, 200);
+  };
+
+  useEffect(() => () => clearTimeout(timerRef.current), []);
+
+  const SIDE_COLOR = { servlet: '#3b82f6', jsoup: '#f59e0b', jsp: '#06b6d4' };
+  const SIDE_LABEL = { servlet: '서블렛', jsoup: 'Jsoup', jsp: 'JSP' };
+
+  const wrap = { margin: '32px 0', borderRadius: '18px', overflow: 'hidden', border: '1px solid var(--ifm-color-emphasis-300)', background: 'var(--ifm-background-surface-color)' };
+  const header = { padding: '18px 24px', borderBottom: '1px solid var(--ifm-color-emphasis-200)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' };
+
+  return (
+    <div style={wrap}>
+      <div style={header}>
+        <div style={{ fontWeight: '700', fontSize: '15px' }}>🕷️ Jsoup 스크래핑 파이프라인</div>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <button onClick={run} disabled={running} style={{ padding: '7px 16px', borderRadius: '8px', border: 'none', background: running ? 'var(--ifm-color-emphasis-300)' : 'var(--ifm-color-primary)', color: running ? 'var(--ifm-color-content-secondary)' : '#fff', fontWeight: '600', fontSize: '13px', cursor: running ? 'not-allowed' : 'pointer' }}>
+            {running ? '진행 중...' : '▶ 실행'}
+          </button>
+          <button onClick={() => { clearTimeout(timerRef.current); setActive(-1); setRunning(false); }} style={{ padding: '7px 12px', borderRadius: '8px', border: '1px solid var(--ifm-color-emphasis-300)', background: 'transparent', color: 'var(--ifm-color-content-secondary)', fontSize: '13px', cursor: 'pointer' }}>↺</button>
+        </div>
+      </div>
+
+      <div style={{ padding: '20px 24px' }}>
+        <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' }}>
+          {Object.entries(SIDE_LABEL).map(([key, label]) => (
+            <div key={key} style={{ padding: '4px 12px', borderRadius: '99px', background: `${SIDE_COLOR[key]}18`, border: `1px solid ${SIDE_COLOR[key]}40`, fontSize: '11px', fontWeight: '700', color: SIDE_COLOR[key] }}>{label}</div>
+          ))}
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          {STEPS.map((step, i) => {
+            const isPast    = i < active;
+            const isCurrent = i === active;
+            const opacity   = active === -1 ? 0.55 : (isPast || isCurrent ? 1 : 0.25);
+            const color     = SIDE_COLOR[step.side];
+            return (
+              <div key={i} style={{ display: 'flex', gap: '12px', alignItems: 'center', padding: '11px 14px', borderRadius: '10px', background: isCurrent ? `${color}14` : isPast ? 'rgba(16,185,129,0.05)' : 'var(--ifm-color-emphasis-100)', border: `1.5px solid ${isCurrent ? color : isPast ? 'rgba(16,185,129,0.3)' : 'var(--ifm-color-emphasis-200)'}`, opacity, transition: 'all 0.3s' }}>
+                <span style={{ fontSize: '18px', minWidth: '24px', textAlign: 'center' }}>{isPast ? '✅' : step.icon}</span>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: '600', fontSize: '13px', color: isCurrent ? color : isPast ? '#10b981' : 'var(--ifm-color-content)' }}>{step.label}</div>
+                  <div style={{ fontSize: '11px', color: 'var(--ifm-color-emphasis-500)', marginTop: '1px', fontFamily: 'monospace' }}>{step.sub}</div>
+                </div>
+                <div style={{ padding: '2px 8px', borderRadius: '99px', background: `${color}18`, fontSize: '10px', fontWeight: '700', color, whiteSpace: 'nowrap' }}>{SIDE_LABEL[step.side]}</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function FetchMethodCompare() {
+  const METHODS = [
+    { label: 'fetch', era: '브라우저 기본', badge: '설치 불필요', badgeColor: '#3b82f6',
+      code: `fetch("http://localhost:8080/api/form", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ firstName, lastName, email }),
+})
+  .then((res) => res.json())   // ← 직접 파싱 필요
+  .then((data) => console.log(data))
+  .catch((err) => console.log(err));` },
+    { label: 'axios', era: 'npm 라이브러리', badge: 'npm i axios', badgeColor: '#10b981',
+      code: `import axios from "axios";
+
+// 응답 자동 파싱 — .then(res => res.json()) 불필요
+axios.post("http://localhost:8080/api/form", { firstName, lastName, email })
+  .then((res) => console.log(res.data))
+  .catch((err) => console.log(err));
+
+// async/await 패턴
+const { data } = await axios.post("/api/form", payload);` },
+  ];
+
+  const [sel, setSel] = useState(0);
+  const tab = METHODS[sel];
+
+  const wrap = { margin: '24px 0', borderRadius: '14px', overflow: 'hidden', border: '1px solid var(--ifm-color-emphasis-300)' };
+  const tabBar = { display: 'flex', background: 'var(--ifm-color-emphasis-100)', borderBottom: '1px solid var(--ifm-color-emphasis-300)' };
+
+  return (
+    <div style={wrap}>
+      <div style={tabBar}>
+        {METHODS.map((t, i) => (
+          <button key={i} onClick={() => setSel(i)} style={{ padding: '10px 18px', border: 'none', background: sel === i ? 'var(--ifm-background-surface-color)' : 'transparent', color: sel === i ? 'var(--ifm-color-content)' : 'var(--ifm-color-emphasis-600)', fontWeight: sel === i ? '600' : '400', fontSize: '13px', cursor: 'pointer', borderBottom: sel === i ? `2px solid ${t.badgeColor}` : '2px solid transparent', marginBottom: '-1px' }}>
+            {t.label} <span style={{ fontSize: '11px', opacity: 0.6 }}>{t.era}</span>
+          </button>
+        ))}
+      </div>
+      <div style={{ background: 'var(--ifm-background-surface-color)', padding: '16px 20px' }}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '10px' }}>
+          <span style={{ fontSize: '11px', padding: '3px 10px', borderRadius: '99px', background: `${tab.badgeColor}20`, color: tab.badgeColor, fontWeight: '600' }}>{tab.badge}</span>
+        </div>
+        <pre style={{ background: '#0d1117', color: '#e6edf3', padding: '18px 20px', borderRadius: '10px', overflow: 'auto', fontSize: '13px', lineHeight: '1.65', margin: 0, fontFamily: "'JetBrains Mono','Fira Code',monospace" }}>
+          <code>{tab.code}</code>
+        </pre>
+      </div>
+    </div>
+  );
+}
+
+리액트 앱이 서버와 대화하고, 화면 전환 없이 경로를 바꾸고, 완성된 UI 컴포넌트를 조합하는 흐름 — 그리고 서버 사이드에서 HTML을 직접 긁어오는 JSP/Jsoup까지, 풀스택 사이클 전체를 직접 돌려보며 이해합니다.
+
+<!-- truncate -->
+
+---
+
+## 1. 리액트 폼 상태관리: 두 가지 패턴
+
+**입력 필드가 독립적이면 필드별 `useState`, 연관 필드 묶음이면 객체 `useState` + 스프레드 갱신.**
+
+어떤 방식이든 반드시 지켜야 할 두 가지 규칙이 있습니다.
+
+<div style={{display:'flex', gap:'14px', flexWrap:'wrap', margin:'20px 0'}}>
+  <div style={{flex:'1 1 200px', padding:'16px', borderRadius:'12px', background:'rgba(59,130,246,0.06)', border:'1px solid rgba(59,130,246,0.25)'}}>
+    <div style={{fontWeight:'700', color:'#3b82f6', marginBottom:'6px', fontSize:'14px'}}>① value 바인딩</div>
+    <div style={{fontSize:'13px', lineHeight:'1.7', color:'var(--ifm-color-content-secondary)'}}>
+      <code>value=&#123;상태값&#125;</code> 없이 <code>onChange</code>만 달면 상태는 바뀌지만 화면이 반영되지 않습니다.
+    </div>
+  </div>
+  <div style={{flex:'1 1 200px', padding:'16px', borderRadius:'12px', background:'rgba(249,115,22,0.06)', border:'1px solid rgba(249,115,22,0.25)'}}>
+    <div style={{fontWeight:'700', color:'#f97316', marginBottom:'6px', fontSize:'14px'}}>② preventDefault</div>
+    <div style={{fontSize:'13px', lineHeight:'1.7', color:'var(--ifm-color-content-secondary)'}}>
+      <code>onSubmit</code>에서 <code>event.preventDefault()</code>를 빠뜨리면 SPA임에도 페이지 전체가 리로드됩니다.
+    </div>
+  </div>
+</div>
+
+탭을 전환해 두 패턴의 코드와 장단점을 비교해보세요.
+
+<FormPatternTabs />
+
+---
+
+## 2. AJAX와 fetch 기반 통신 구조
+
+**AJAX는 화면 전환 없이 서버와 데이터만 교환하는 방식이며, `fetch`는 Promise를 반환하는 브라우저 기본 HTTP 클라이언트입니다.**
+
+`fetch`는 응답 스트림을 직접 `.json()`으로 파싱해야 하지만, `axios`는 자동으로 처리합니다. 탭으로 비교해보세요.
+
+<FetchMethodCompare />
+
+> **fetch vs axios 선택 기준** — 팀 프로젝트에서는 인터셉터(토큰 자동 삽입, 에러 전처리)가 필요한 경우 axios가 유리합니다. 토이 프로젝트나 학습 목적이라면 fetch로 Promise 흐름을 먼저 이해하는 것을 권장합니다.
+
+---
+
+## 3. OpenWeatherMap API — 날씨 데이터 출력
+
+**외부 API 연동 절차: 가입 → API Key 발급 → DOC 확인 → 엔드포인트 호출.**
+
+응답 JSON은 중첩 구조이므로 필요한 값의 경로를 파악하는 것이 핵심입니다.
+
+| 상태(State) | 응답 경로 | 용도 |
+|---|---|---|
+| `temp` | `data.main.temp` | 현재 기온 표시 |
+| `desc` | `data.weather[0].description` | 날씨 텍스트 |
+| `icon` | `data.weather[0].icon` | 아이콘 URL 조합 (`50n` → `50n@2x.png`) |
+| `isReady` | — | 로딩 완료 플래그, 마지막에 `true`로 전환 |
+
+```jsx
+useEffect(() => {
+  fetch(`https://api.openweathermap.org/data/2.5/weather?q=Seoul&appid=${KEY}&units=metric`)
+    .then((res) => res.json())
+    .then((data) => {
+      setTemp(data.main.temp);
+      setDesc(data.weather[0].description);
+      setIcon(data.weather[0].icon);
+      setReady(true);     // 모든 값 세팅 완료 후 플래그 전환
+    });
+}, []);
+
+return isReady
+  ? <img src={`https://openweathermap.org/img/wn/${icon}@2x.png`} />
+  : <p>날씨 로딩 중...</p>;
+```
+
+> **`isReady`를 마지막에 세팅하는 이유** — temp만 먼저 세팅되고 icon이 아직 빈 값이면 깨진 이미지가 순간 노출됩니다. 모든 상태가 준비된 뒤 한 번에 전환합니다.
+
+---
+
+## 4. 리액트 → 스프링부트 연동, DTO, CORS
+
+**리액트의 POST 요청은 `@RequestBody`로 DTO에 자동 매핑됩니다. CORS는 포트 차이로 발생하는 브라우저 보안 정책입니다.**
+
+아래 버튼으로 `@CrossOrigin` ON/OFF 상태에 따른 결과를 직접 확인하세요.
+
+<CORSExplainer />
+
+`@CrossOrigin`은 빠른 해결책이지만 개발 단계용입니다. **전체 엔드포인트에 CORS를 적용하려면** `WebMvcConfigurer.addCorsMappings`를 사용합니다.
+
+```java
+// 전역 CORS 설정 (운영 환경 권장)
+@Configuration
+public class WebConfig implements WebMvcConfigurer {
+    @Override
+    public void addCorsMappings(CorsRegistry registry) {
+        registry.addMapping("/api/**")
+                .allowedOrigins("http://localhost:5173")
+                .allowedMethods("GET", "POST", "PUT", "DELETE");
+    }
+}
+```
+
+---
+
+## 5. React Router DOM — SPA 라우팅
+
+**`Link`는 `<a href>` 와 다르게 전체 리로드 없이 히스토리 API 기반으로 화면을 전환합니다.**
+
+두 방식의 차이를 직접 클릭해서 확인해보세요.
+
+<RouterViz />
+
+```bash
+npm i react-router-dom
+```
+
+```jsx
+<BrowserRouter>
+  <nav>
+    <Link to="/">Home</Link>        {/* a 태그 대신 Link 사용 */}
+    <Link to="/container">Items</Link>
+  </nav>
+  <Routes>
+    <Route path="/"          element={<Home />} />
+    <Route path="/container" element={<Container />} />
+  </Routes>
+</BrowserRouter>
+```
+
+> **중첩 라우팅** — 부모 `Route`에 `<Outlet />`을 두면 자식 Route가 그 자리에 삽입됩니다. 헤더/푸터 고정 레이아웃에서 자주 사용하는 패턴입니다.
+
+---
+
+## 6. 컴포넌트 구조와 React DevTools
+
+**Layout(고정 프레임) → Outlet(교체 영역) → Page 구조가 기본 템플릿 패턴입니다.**
+
+```
+BrowserRouter
+  └── MainLayout  ← 헤더/푸터 고정
+        └── Outlet ← Route 결과가 삽입되는 자리
+              ├── HomePage
+              ├── FeedPage
+              └── ProfilePage
+```
+
+| 디렉토리 | 역할 | 예시 |
+|---|---|---|
+| `layout/` | 공통 프레임 | `MainLayout` |
+| `pages/` | 라우팅 단위 화면 | `LoginPage`, `FeedPage` |
+| `components/` | 재사용 UI 조각 | `Button`, `Header` |
+| `services/` | API 통신 로직 | `authService`, `apiClient` |
+
+**React DevTools(Chrome 확장)** — Components 탭에서 컴포넌트 트리, props, state, hooks를 실시간 확인할 수 있어 데이터 흐름 디버깅에 필수입니다.
+
+---
+
+## 7. MUI — 완성된 컴포넌트로 빠른 UI 구성
+
+```bash
+npm install @mui/material @emotion/react @emotion/styled
+npm install @mui/icons-material    # 아이콘 필요 시
+```
+
+> **전역 CSS 충돌 주의** — `main.jsx`에서 import하는 `index.css`가 MUI 기본 스타일을 덮어쓸 수 있습니다. 초기 실습에서는 전역 CSS import를 주석 처리하고 시작하세요.
+
+아래에서 추가/삭제를 직접 실습해보세요.
+
+<MUIListDemo />
+
+| 컴포넌트 | 역할 | 핵심 prop |
+|---|---|---|
+| `AppBar`/`Toolbar` | 상단 헤더 | `position="static"` |
+| `Dialog` | 모달 입력창 | `open`, `onClose` |
+| `TextField` | 텍스트 입력 | `name`, `value`, `onChange` |
+| `List`/`ListItemText` | 목록 렌더링 | `primary`, `secondary` |
+
+> **콜백 함정** — `onClick={removeItem(idx)}`는 렌더링 시 즉시 실행됩니다. 반드시 `onClick={() => removeItem(idx)}`처럼 화살표 함수로 감싸야 합니다.
+
+---
+
+## 8. JSP/서블렛과 Jsoup 스크래핑
+
+**Jsoup은 URL로 원격 HTML을 가져와 CSS 선택자로 DOM을 탐색하는 Java 라이브러리입니다.**
+
+아래 파이프라인을 실행해 서블렛 → Jsoup → JSP 전체 흐름을 단계별로 확인하세요.
+
+<ScrapingFlow />
+
+```java
+// 서블렛 핵심 코드
+String url    = "https://comic.naver.com/webtoon/detail?titleId=" + titleId;
+Document doc  = Jsoup.connect(url).get();                    // HTML 전체 문서
+Elements imgs = doc.select("#comic_view_area img");          // CSS 선택자로 탐색
+
+List<String> srcList = new ArrayList<>();
+for (Element img : imgs) srcList.add(img.attr("src"));       // src 속성 수집
+
+request.setAttribute("images", srcList);
+request.getRequestDispatcher("/webtoon.jsp").forward(request, response);
+```
+
+```jsp
+<%-- webtoon.jsp --%>
+<% List<String> images = (List<String>) request.getAttribute("images");
+   for (String src : images) { %>
+  <img src="<%= src %>" style="width:100%;" />
+<% } %>
+```
+
+> **법적 주의** — 스크래핑 대상의 이용약관과 저작권을 반드시 확인하세요. 이미지·콘텐츠를 상업적으로 재배포하면 법적 문제가 발생합니다.
+
+---
+
+## 9. WS vs WAS vs JSP, 그리고 SPA
+
+| 방식 | HTML 생성 주체 | 데이터 형태 | 특징 |
+|---|---|---|---|
+| JSP / Thymeleaf | 서버(WAS) | 완성된 HTML | 서버 부하, SEO 유리 |
+| React (SPA) | 브라우저 | JSON → 컴포넌트 렌더링 | 인터랙션 빠름, 초기 로딩 최적화 필요 |
+
+최종 브라우저가 받는 것은 둘 다 HTML이지만 **HTML을 조립하는 위치**가 다릅니다.
+
+---
+
+## fetch POST 전체 흐름 요약
+
+아래에서 ▶ 실행을 눌러 POST 요청이 어떤 순서로 처리되는지 한 눈에 확인하세요.
+
+<FetchFlowViz />
+
+---
+
+## 선택 기준 요약
+
+| 상황 | 선택 |
+|---|---|
+| 독립 필드 입력 | 필드별 `useState` |
+| 연관 필드 묶음 | 객체 `useState` + `[e.target.name]` 스프레드 |
+| 비동기 HTTP (기본) | `fetch` + Promise chain |
+| 비동기 HTTP (편의) | `axios` |
+| SPA 경로 전환 | `react-router-dom` + `Link` |
+| 완성 UI 컴포넌트 | MUI (`@mui/material`) |
+| 서버 사이드 렌더링 | JSP / Thymeleaf |
+| 외부 HTML 파싱 | `Jsoup` |
+| CORS (개발) | `@CrossOrigin(origins = "...")` |
+| CORS (전역 설정) | `WebMvcConfigurer.addCorsMappings` |
