@@ -1,0 +1,742 @@
+---
+title: "웹 프로토콜과 서블릿 — HTTP, 스코프, 로그인/회원 기능 구현"
+date: 2026-04-08
+authors: HyungJun
+tags: [Web, Java]
+---
+
+import { useState, useEffect, useRef } from 'react';
+
+{/* ────────────────────────────────────────────────────────────
+    Component 1: HTTP 메서드 비교 탭
+──────────────────────────────────────────────────────────── */}
+export function HttpMethodCompare() {
+  const METHODS = [
+    {
+      name: 'GET',
+      color: '#3b82f6',
+      badge: '조회',
+      dataLoc: 'URL 쿼리스트링',
+      dataExample: '/users?id=1&name=홍길동',
+      features: ['캐싱 가능', '북마크 가능', '브라우저 주소창으로 직접 테스트 가능'],
+      caution: '민감 데이터(비밀번호 등) 절대 금지 — URL에 노출됨',
+      useCases: ['게시글 조회', '상품 목록', '상세 보기', '검색 결과'],
+    },
+    {
+      name: 'POST',
+      color: '#10b981',
+      badge: '생성',
+      dataLoc: 'Request Body',
+      dataExample: '{"id":"user1","pw":"secret"}',
+      features: ['Body에 숨김 전송', '대용량 데이터 가능', 'Content-Type 헤더 필요'],
+      caution: '캐싱 안 됨 — 브라우저 새로고침 시 중복 제출 경고 발생',
+      useCases: ['로그인', '회원가입', '게시글 작성', '주문 생성'],
+    },
+    {
+      name: 'PUT',
+      color: '#f59e0b',
+      badge: '전체 수정',
+      dataLoc: 'Request Body',
+      dataExample: '{"title":"새제목","content":"새내용","tags":[...]}',
+      features: ['리소스 전체 교체', '보내지 않은 필드는 null로 처리'],
+      caution: '일부만 변경하면 누락 필드가 덮어씌워짐 → PATCH 사용 권장',
+      useCases: ['게시글 전체 수정', '프로필 전체 업데이트'],
+    },
+    {
+      name: 'PATCH',
+      color: '#8b5cf6',
+      badge: '부분 수정',
+      dataLoc: 'Request Body',
+      dataExample: '{"email":"new@email.com"}',
+      features: ['보낸 필드만 변경', '나머지 필드 유지'],
+      caution: '멱등성 보장은 구현 방식에 따라 다름',
+      useCases: ['이메일만 수정', '제목만 변경', '재고 수량 차감'],
+    },
+    {
+      name: 'DELETE',
+      color: '#ef4444',
+      badge: '삭제',
+      dataLoc: 'URL 또는 Body',
+      dataExample: 'DELETE /users/1',
+      features: ['리소스 삭제 요청', 'Body 없이 URL 파라미터만으로 처리 가능'],
+      caution: '실무에서는 물리 삭제 대신 enable 플래그 변경(논리 삭제) 권장',
+      useCases: ['게시글 삭제', '회원 탈퇴', '댓글 삭제'],
+    },
+  ];
+
+  const [active, setActive] = useState(0);
+  const m = METHODS[active];
+
+  const wrap = { margin: '32px 0', borderRadius: '18px', overflow: 'hidden', border: '1px solid var(--ifm-color-emphasis-300)', background: 'var(--ifm-background-surface-color)' };
+  const tabBar = { display: 'flex', borderBottom: '1px solid var(--ifm-color-emphasis-200)', overflowX: 'auto' };
+  const body = { padding: '24px' };
+
+  return (
+    <div style={wrap}>
+      <div style={{ padding: '16px 24px 0', borderBottom: '1px solid var(--ifm-color-emphasis-200)' }}>
+        <div style={{ fontWeight: '700', fontSize: '15px', marginBottom: '12px' }}>🔀 HTTP 메서드 비교</div>
+        <div style={{ display: 'flex', gap: '4px', overflowX: 'auto', paddingBottom: '0' }}>
+          {METHODS.map((mt, i) => (
+            <button key={i} onClick={() => setActive(i)} style={{ padding: '8px 18px', border: 'none', borderRadius: '8px 8px 0 0', fontWeight: '700', fontSize: '13px', cursor: 'pointer', background: active === i ? mt.color : 'var(--ifm-color-emphasis-200)', color: active === i ? '#fff' : 'var(--ifm-color-content-secondary)', transition: 'all 0.2s', whiteSpace: 'nowrap' }}>
+              {mt.name}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div style={body}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
+          <span style={{ fontSize: '24px', fontWeight: '800', color: m.color }}>{m.name}</span>
+          <span style={{ padding: '3px 10px', borderRadius: '6px', background: `${m.color}20`, color: m.color, fontWeight: '700', fontSize: '12px' }}>{m.badge}</span>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '16px' }}>
+          <div style={{ padding: '14px', borderRadius: '10px', background: 'var(--ifm-color-emphasis-100)', border: '1px solid var(--ifm-color-emphasis-200)' }}>
+            <div style={{ fontSize: '11px', fontWeight: '700', color: 'var(--ifm-color-emphasis-500)', marginBottom: '6px' }}>데이터 위치</div>
+            <div style={{ fontSize: '13px', fontWeight: '600', color: m.color }}>{m.dataLoc}</div>
+            <div style={{ marginTop: '8px', padding: '8px', borderRadius: '6px', background: 'var(--ifm-code-background)', fontFamily: 'monospace', fontSize: '11px', color: 'var(--ifm-color-content-secondary)', wordBreak: 'break-all' }}>{m.dataExample}</div>
+          </div>
+          <div style={{ padding: '14px', borderRadius: '10px', background: 'var(--ifm-color-emphasis-100)', border: '1px solid var(--ifm-color-emphasis-200)' }}>
+            <div style={{ fontSize: '11px', fontWeight: '700', color: 'var(--ifm-color-emphasis-500)', marginBottom: '8px' }}>주요 특징</div>
+            {m.features.map((f, i) => (
+              <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: '6px', marginBottom: '5px', fontSize: '12px' }}>
+                <span style={{ color: m.color, fontWeight: '700', marginTop: '1px' }}>•</span>
+                <span>{f}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ padding: '12px 16px', borderRadius: '10px', background: '#fef3c7', border: '1px solid #fcd34d', marginBottom: '16px', display: 'flex', gap: '10px', alignItems: 'flex-start' }}>
+          <span style={{ fontSize: '16px' }}>⚠️</span>
+          <span style={{ fontSize: '12px', color: '#92400e' }}>{m.caution}</span>
+        </div>
+
+        <div style={{ padding: '14px', borderRadius: '10px', background: 'var(--ifm-color-emphasis-100)', border: '1px solid var(--ifm-color-emphasis-200)' }}>
+          <div style={{ fontSize: '11px', fontWeight: '700', color: 'var(--ifm-color-emphasis-500)', marginBottom: '8px' }}>실무 사용 예</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+            {m.useCases.map((uc, i) => (
+              <span key={i} style={{ padding: '4px 10px', borderRadius: '20px', background: `${m.color}15`, color: m.color, fontSize: '12px', fontWeight: '600' }}>{uc}</span>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+{/* ────────────────────────────────────────────────────────────
+    Component 2: 서블릿 요청 흐름 단계별 시각화
+──────────────────────────────────────────────────────────── */}
+export function ServletFlowViz() {
+  const SCENARIOS = [
+    {
+      label: '로그인',
+      method: 'POST',
+      methodColor: '#10b981',
+      steps: [
+        { icon: '🖥️', label: '클라이언트 요청',      sub: 'POST /login   (id=user1, pw=1234)', color: '#3b82f6' },
+        { icon: '🔌', label: 'LoginServlet.doPost()', sub: 'request.setCharacterEncoding("UTF-8")', color: '#8b5cf6' },
+        { icon: '📦', label: '파라미터 수신',          sub: 'getParameter("id") / getParameter("pw")', color: '#f59e0b' },
+        { icon: '🗄️', label: 'DAO.login(dto)',         sub: 'DB 조회 → LoginDto 반환', color: '#06b6d4' },
+        { icon: '🗝️', label: 'Session 저장',           sub: 'session.setAttribute("loginDto", dto)', color: '#10b981' },
+        { icon: '📄', label: 'JSP 포워드',              sub: 'web-inf/views/main.jsp', color: '#10b981' },
+      ],
+    },
+    {
+      label: '마이페이지',
+      method: 'GET',
+      methodColor: '#3b82f6',
+      steps: [
+        { icon: '🖥️', label: '클라이언트 요청',         sub: 'GET /userInfo', color: '#3b82f6' },
+        { icon: '🔌', label: 'UserInfoServlet.doGet()', sub: '세션에서 로그인 DTO 획득', color: '#8b5cf6' },
+        { icon: '🗝️', label: '세션 조회',                sub: '(LoginDto) session.getAttribute("loginDto")', color: '#f59e0b' },
+        { icon: '🗄️', label: 'DAO.getUserInfo(id)',      sub: 'id로 사용자 상세 정보 조회', color: '#06b6d4' },
+        { icon: '📦', label: 'Request 스코프 저장',      sub: 'request.setAttribute("userInfo", dto)', color: '#10b981' },
+        { icon: '📄', label: 'JSP 포워드',               sub: 'web-inf/views/userInfo.jsp → ${userInfo}', color: '#10b981' },
+      ],
+    },
+    {
+      label: '회원가입',
+      method: 'POST',
+      methodColor: '#10b981',
+      steps: [
+        { icon: '🖥️', label: '클라이언트 요청',           sub: 'POST /register   (id, name, pw, email)', color: '#3b82f6' },
+        { icon: '🔌', label: 'RegisterServlet.doPost()', sub: 'request.setCharacterEncoding("UTF-8")', color: '#8b5cf6' },
+        { icon: '📦', label: 'Builder로 DTO 생성',         sub: 'UserDto.builder().id(...).name(...).build()', color: '#f59e0b' },
+        { icon: '🗄️', label: 'DAO.register(dto)',          sub: 'INSERT → int cnt (성공=1)', color: '#06b6d4' },
+        { icon: '✅', label: 'cnt > 0 → 리다이렉트',       sub: 'sendRedirect("/")   → 로그인 페이지', color: '#10b981' },
+        { icon: '🔁', label: 'cnt == 0 → 재입력 유도',     sub: 'sendRedirect("/register")   GET으로 재요청', color: '#ef4444' },
+      ],
+    },
+  ];
+
+  const [scenario, setScenario] = useState(0);
+  const [active, setActive] = useState(-1);
+  const [running, setRunning] = useState(false);
+  const timerRef = useRef(null);
+  const sc = SCENARIOS[scenario];
+
+  const run = () => {
+    setActive(-1);
+    setRunning(true);
+    let i = 0;
+    const next = () => {
+      setActive(i);
+      i++;
+      if (i < sc.steps.length) timerRef.current = setTimeout(next, 650);
+      else setRunning(false);
+    };
+    timerRef.current = setTimeout(next, 200);
+  };
+
+  const reset = () => { clearTimeout(timerRef.current); setActive(-1); setRunning(false); };
+
+  const changeScenario = (idx) => { reset(); setScenario(idx); };
+
+  useEffect(() => () => clearTimeout(timerRef.current), []);
+
+  const wrap = { margin: '32px 0', borderRadius: '18px', overflow: 'hidden', border: '1px solid var(--ifm-color-emphasis-300)', background: 'var(--ifm-background-surface-color)' };
+
+  return (
+    <div style={wrap}>
+      <div style={{ padding: '18px 24px', borderBottom: '1px solid var(--ifm-color-emphasis-200)' }}>
+        <div style={{ fontWeight: '700', fontSize: '15px', marginBottom: '12px' }}>⚙️ 서블릿 요청 흐름 시뮬레이션</div>
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          {SCENARIOS.map((s, i) => (
+            <button key={i} onClick={() => changeScenario(i)} style={{ padding: '6px 14px', borderRadius: '8px', border: `2px solid ${scenario === i ? s.methodColor : 'var(--ifm-color-emphasis-300)'}`, background: scenario === i ? `${s.methodColor}15` : 'transparent', color: scenario === i ? s.methodColor : 'var(--ifm-color-content-secondary)', fontWeight: '700', fontSize: '12px', cursor: 'pointer', transition: 'all 0.2s' }}>
+              <span style={{ marginRight: '5px', padding: '1px 5px', borderRadius: '4px', background: s.methodColor, color: '#fff', fontSize: '10px' }}>{s.method}</span>
+              {s.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        {sc.steps.map((step, i) => {
+          const isPast = i < active;
+          const isCurrent = i === active;
+          const opacity = active === -1 ? 0.5 : (isPast || isCurrent ? 1 : 0.25);
+          const bg = isCurrent ? `${step.color}18` : isPast ? 'rgba(16,185,129,0.07)' : 'var(--ifm-color-emphasis-100)';
+          const border = isCurrent ? `2px solid ${step.color}` : isPast ? '2px solid rgba(16,185,129,0.3)' : '2px solid var(--ifm-color-emphasis-200)';
+          return (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '11px 14px', borderRadius: '10px', background: bg, border, opacity, transition: 'all 0.3s ease' }}>
+              <span style={{ fontSize: '18px', minWidth: '26px', textAlign: 'center' }}>{isPast ? '✅' : step.icon}</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: '700', fontSize: '13px', color: isCurrent ? step.color : isPast ? '#10b981' : 'var(--ifm-color-content)' }}>{step.label}</div>
+                <div style={{ fontSize: '11px', fontFamily: 'monospace', color: 'var(--ifm-color-emphasis-500)', marginTop: '2px' }}>{step.sub}</div>
+              </div>
+              {isCurrent && <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: step.color, flexShrink: 0, boxShadow: `0 0 8px ${step.color}` }} />}
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{ padding: '14px 24px', borderTop: '1px solid var(--ifm-color-emphasis-200)', display: 'flex', gap: '8px', alignItems: 'center' }}>
+        <button onClick={run} disabled={running} style={{ padding: '8px 18px', borderRadius: '8px', border: 'none', background: running ? 'var(--ifm-color-emphasis-300)' : sc.methodColor, color: running ? 'var(--ifm-color-content-secondary)' : '#fff', fontWeight: '700', fontSize: '13px', cursor: running ? 'not-allowed' : 'pointer', transition: 'all 0.2s' }}>
+          {running ? '진행 중...' : '▶ 실행'}
+        </button>
+        <button onClick={reset} style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid var(--ifm-color-emphasis-300)', background: 'transparent', color: 'var(--ifm-color-content-secondary)', fontSize: '13px', cursor: 'pointer' }}>↺ 초기화</button>
+        {active === -1 && <span style={{ fontSize: '12px', color: 'var(--ifm-color-emphasis-400)' }}>시나리오를 선택하고 ▶ 실행을 눌러보세요</span>}
+      </div>
+    </div>
+  );
+}
+
+{/* ────────────────────────────────────────────────────────────
+    Component 3: Request vs Session 스코프 체험
+──────────────────────────────────────────────────────────── */}
+export function ScopeSimulator() {
+  const [requestAttrs, setRequestAttrs] = useState({});
+  const [sessionAttrs, setSessionAttrs] = useState({});
+  const [inputKey, setInputKey] = useState('userInfo');
+  const [inputVal, setInputVal] = useState('홍길동');
+  const [scope, setScope] = useState('request');
+  const [forwarded, setForwarded] = useState(false);
+  const [step, setStep] = useState('idle'); // idle | stored | forwarded | redirected
+
+  const store = () => {
+    if (!inputKey.trim() || !inputVal.trim()) return;
+    if (scope === 'request') setRequestAttrs(prev => ({ ...prev, [inputKey]: inputVal }));
+    else setSessionAttrs(prev => ({ ...prev, [inputKey]: inputVal }));
+    setStep('stored');
+    setForwarded(false);
+  };
+
+  const doForward = () => {
+    setStep('forwarded');
+    setForwarded(true);
+    // request scope가 forward 후에도 유지됨 (같은 request)
+  };
+
+  const doRedirect = () => {
+    setStep('redirected');
+    setForwarded(false);
+    setRequestAttrs({}); // redirect = 새 request → request scope 초기화
+    // session은 유지
+  };
+
+  const doLogout = () => {
+    setSessionAttrs({});
+    setRequestAttrs({});
+    setStep('idle');
+    setForwarded(false);
+  };
+
+  const scopeColors = { request: '#3b82f6', session: '#10b981' };
+
+  const wrap = { margin: '32px 0', borderRadius: '18px', overflow: 'hidden', border: '1px solid var(--ifm-color-emphasis-300)', background: 'var(--ifm-background-surface-color)' };
+  const ScopeBox = ({ title, color, attrs, note }) => (
+    <div style={{ flex: 1, padding: '16px', borderRadius: '12px', border: `2px solid ${color}40`, background: `${color}08` }}>
+      <div style={{ fontWeight: '700', fontSize: '13px', color, marginBottom: '10px' }}>{title}</div>
+      {Object.keys(attrs).length === 0
+        ? <div style={{ fontSize: '12px', color: 'var(--ifm-color-emphasis-400)', fontStyle: 'italic' }}>비어 있음</div>
+        : Object.entries(attrs).map(([k, v]) => (
+          <div key={k} style={{ display: 'flex', gap: '6px', marginBottom: '5px', fontSize: '12px' }}>
+            <span style={{ fontFamily: 'monospace', color, fontWeight: '600' }}>"{k}"</span>
+            <span style={{ color: 'var(--ifm-color-emphasis-400)' }}>→</span>
+            <span style={{ fontFamily: 'monospace' }}>"{v}"</span>
+          </div>
+        ))}
+      {note && <div style={{ marginTop: '10px', fontSize: '11px', color: 'var(--ifm-color-emphasis-400)', borderTop: `1px solid ${color}30`, paddingTop: '8px' }}>{note}</div>}
+    </div>
+  );
+
+  return (
+    <div style={wrap}>
+      <div style={{ padding: '18px 24px', borderBottom: '1px solid var(--ifm-color-emphasis-200)', fontWeight: '700', fontSize: '15px' }}>🧪 Request / Session 스코프 체험</div>
+
+      <div style={{ padding: '20px 24px' }}>
+        {/* 저장 폼 */}
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: '16px' }}>
+          <div>
+            <div style={{ fontSize: '11px', fontWeight: '600', color: 'var(--ifm-color-emphasis-500)', marginBottom: '4px' }}>key</div>
+            <input value={inputKey} onChange={e => setInputKey(e.target.value)} style={{ padding: '7px 10px', borderRadius: '8px', border: '1px solid var(--ifm-color-emphasis-300)', background: 'var(--ifm-background-color)', color: 'var(--ifm-color-content)', fontSize: '13px', fontFamily: 'monospace', width: '120px' }} />
+          </div>
+          <div>
+            <div style={{ fontSize: '11px', fontWeight: '600', color: 'var(--ifm-color-emphasis-500)', marginBottom: '4px' }}>value</div>
+            <input value={inputVal} onChange={e => setInputVal(e.target.value)} style={{ padding: '7px 10px', borderRadius: '8px', border: '1px solid var(--ifm-color-emphasis-300)', background: 'var(--ifm-background-color)', color: 'var(--ifm-color-content)', fontSize: '13px', width: '120px' }} />
+          </div>
+          <div>
+            <div style={{ fontSize: '11px', fontWeight: '600', color: 'var(--ifm-color-emphasis-500)', marginBottom: '4px' }}>스코프</div>
+            <div style={{ display: 'flex', gap: '4px' }}>
+              {['request', 'session'].map(s => (
+                <button key={s} onClick={() => setScope(s)} style={{ padding: '7px 12px', borderRadius: '8px', border: `2px solid ${scope === s ? scopeColors[s] : 'var(--ifm-color-emphasis-300)'}`, background: scope === s ? `${scopeColors[s]}15` : 'transparent', color: scope === s ? scopeColors[s] : 'var(--ifm-color-content-secondary)', fontWeight: '700', fontSize: '12px', cursor: 'pointer' }}>
+                  {s}
+                </button>
+              ))}
+            </div>
+          </div>
+          <button onClick={store} style={{ padding: '8px 16px', borderRadius: '8px', border: 'none', background: scopeColors[scope], color: '#fff', fontWeight: '700', fontSize: '13px', cursor: 'pointer' }}>
+            setAttribute
+          </button>
+        </div>
+
+        {/* 스코프 박스 */}
+        <div style={{ display: 'flex', gap: '12px', marginBottom: '16px' }}>
+          <ScopeBox
+            title="📦 Request Scope"
+            color="#3b82f6"
+            attrs={requestAttrs}
+            note="forward 이후에도 유지 / redirect하면 사라짐"
+          />
+          <ScopeBox
+            title="🗝️ Session Scope"
+            color="#10b981"
+            attrs={sessionAttrs}
+            note="여러 요청에 걸쳐 유지 / invalidate() 시 삭제"
+          />
+        </div>
+
+        {/* 액션 버튼 */}
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          <button onClick={doForward} style={{ padding: '7px 14px', borderRadius: '8px', border: 'none', background: '#3b82f6', color: '#fff', fontWeight: '700', fontSize: '12px', cursor: 'pointer' }}>
+            forward → JSP
+          </button>
+          <button onClick={doRedirect} style={{ padding: '7px 14px', borderRadius: '8px', border: 'none', background: '#f59e0b', color: '#fff', fontWeight: '700', fontSize: '12px', cursor: 'pointer' }}>
+            sendRedirect (새 요청)
+          </button>
+          <button onClick={doLogout} style={{ padding: '7px 14px', borderRadius: '8px', border: 'none', background: '#ef4444', color: '#fff', fontWeight: '700', fontSize: '12px', cursor: 'pointer' }}>
+            session.invalidate()
+          </button>
+        </div>
+
+        {/* 상태 메시지 */}
+        {step !== 'idle' && (
+          <div style={{ marginTop: '14px', padding: '12px 16px', borderRadius: '10px', background: step === 'redirected' ? '#fef3c7' : step === 'forwarded' ? '#eff6ff' : '#f0fdf4', border: `1px solid ${step === 'redirected' ? '#fcd34d' : step === 'forwarded' ? '#93c5fd' : '#86efac'}`, fontSize: '13px', color: step === 'redirected' ? '#92400e' : step === 'forwarded' ? '#1e40af' : '#166534' }}>
+            {step === 'stored' && '✅ setAttribute 완료. 위 스코프 박스를 확인하세요.'}
+            {step === 'forwarded' && '🔀 forward 완료. Request 스코프 값은 JSP에서 ${key}로 꺼낼 수 있습니다. Session 스코프도 그대로 유지됩니다.'}
+            {step === 'redirected' && '🔁 sendRedirect 발생 — 새로운 HTTP 요청이 시작되어 Request 스코프가 초기화됐습니다. Session 스코프는 유지됩니다.'}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+{/* ────────────────────────────────────────────────────────────
+    Component 4: Forward vs Redirect 비교 시각화
+──────────────────────────────────────────────────────────── */}
+export function ForwardRedirectViz() {
+  const [mode, setMode] = useState('forward');
+
+  const FORWARD_STEPS = [
+    { from: '브라우저', to: '서블릿', label: 'GET /mypage', arrow: '→', color: '#3b82f6', note: '첫 요청' },
+    { from: '서블릿', to: 'DAO',     label: 'DB 조회',     arrow: '→', color: '#8b5cf6', note: '내부 처리' },
+    { from: '서블릿', to: 'JSP',     label: 'forward (서버 내부)', arrow: '→', color: '#10b981', note: 'request 객체 유지' },
+    { from: 'JSP',    to: '브라우저', label: 'HTML 응답',   arrow: '→', color: '#10b981', note: 'URL 그대로 유지됨' },
+  ];
+
+  const REDIRECT_STEPS = [
+    { from: '브라우저', to: '서블릿', label: 'POST /login', arrow: '→', color: '#3b82f6', note: '첫 요청' },
+    { from: '서블릿',  to: '브라우저', label: '302 Location: /', arrow: '←', color: '#f59e0b', note: 'sendRedirect 응답' },
+    { from: '브라우저', to: '서버',   label: 'GET / (새 요청)', arrow: '→', color: '#ef4444', note: 'request 스코프 초기화' },
+    { from: '서버',    to: '브라우저', label: '200 HTML',   arrow: '←', color: '#10b981', note: 'URL이 /로 바뀜' },
+  ];
+
+  const steps = mode === 'forward' ? FORWARD_STEPS : REDIRECT_STEPS;
+  const color = mode === 'forward' ? '#3b82f6' : '#f59e0b';
+
+  const wrap = { margin: '32px 0', borderRadius: '18px', overflow: 'hidden', border: '1px solid var(--ifm-color-emphasis-300)', background: 'var(--ifm-background-surface-color)' };
+
+  const comparison = [
+    { label: 'URL 변화',       forward: '없음 (원래 URL 유지)',      redirect: '새 URL로 변경됨' },
+    { label: 'Request 유지',   forward: '✅ 유지 (동일 request)',      redirect: '❌ 새 request 생성' },
+    { label: '왕복 횟수',      forward: '1회 (서버 내부 이동)',        redirect: '2회 (클라이언트가 재요청)' },
+    { label: 'web-inf 접근',  forward: '✅ 가능',                     redirect: '❌ 불가 (클라이언트 직접 접근)' },
+    { label: '주 사용 상황',   forward: '결과 화면 전달',              redirect: '로그인 후 초기화, 로그아웃' },
+  ];
+
+  return (
+    <div style={wrap}>
+      <div style={{ padding: '18px 24px', borderBottom: '1px solid var(--ifm-color-emphasis-200)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ fontWeight: '700', fontSize: '15px' }}>🔀 forward vs redirect</div>
+        <div style={{ display: 'flex', gap: '6px' }}>
+          {['forward', 'redirect'].map(m => (
+            <button key={m} onClick={() => setMode(m)} style={{ padding: '7px 16px', borderRadius: '8px', border: `2px solid ${mode === m ? (m === 'forward' ? '#3b82f6' : '#f59e0b') : 'var(--ifm-color-emphasis-300)'}`, background: mode === m ? `${m === 'forward' ? '#3b82f6' : '#f59e0b'}15` : 'transparent', color: mode === m ? (m === 'forward' ? '#3b82f6' : '#f59e0b') : 'var(--ifm-color-content-secondary)', fontWeight: '700', fontSize: '13px', cursor: 'pointer', transition: 'all 0.2s' }}>
+              {m === 'forward' ? 'RequestDispatcher.forward()' : 'response.sendRedirect()'}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ padding: '24px' }}>
+        {/* 흐름도 */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '24px' }}>
+          {steps.map((s, i) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <div style={{ padding: '6px 12px', borderRadius: '8px', background: 'var(--ifm-color-emphasis-100)', border: '1px solid var(--ifm-color-emphasis-200)', fontSize: '12px', fontWeight: '700', minWidth: '70px', textAlign: 'center' }}>{s.from}</div>
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                <div style={{ fontSize: '11px', fontWeight: '700', color: s.color, marginBottom: '2px' }}>{s.label}</div>
+                <div style={{ height: '2px', width: '100%', background: `linear-gradient(to ${s.arrow === '→' ? 'right' : 'left'}, transparent, ${s.color}, transparent)`, position: 'relative' }}>
+                  <div style={{ position: 'absolute', [s.arrow === '→' ? 'right' : 'left']: '-4px', top: '-5px', color: s.color, fontSize: '14px', fontWeight: '700' }}>{s.arrow === '→' ? '▶' : '◀'}</div>
+                </div>
+                <div style={{ fontSize: '10px', color: 'var(--ifm-color-emphasis-400)', marginTop: '2px' }}>{s.note}</div>
+              </div>
+              <div style={{ padding: '6px 12px', borderRadius: '8px', background: 'var(--ifm-color-emphasis-100)', border: '1px solid var(--ifm-color-emphasis-200)', fontSize: '12px', fontWeight: '700', minWidth: '70px', textAlign: 'center' }}>{s.to}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* 비교 테이블 */}
+        <div style={{ borderRadius: '12px', overflow: 'hidden', border: '1px solid var(--ifm-color-emphasis-200)' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', background: 'var(--ifm-color-emphasis-100)' }}>
+            <div style={{ padding: '10px 14px', fontSize: '12px', fontWeight: '700', color: 'var(--ifm-color-emphasis-500)' }}>구분</div>
+            <div style={{ padding: '10px 14px', fontSize: '12px', fontWeight: '700', color: '#3b82f6', borderLeft: '1px solid var(--ifm-color-emphasis-200)' }}>forward</div>
+            <div style={{ padding: '10px 14px', fontSize: '12px', fontWeight: '700', color: '#f59e0b', borderLeft: '1px solid var(--ifm-color-emphasis-200)' }}>redirect</div>
+          </div>
+          {comparison.map((row, i) => (
+            <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', borderTop: '1px solid var(--ifm-color-emphasis-200)', background: mode === 'forward' ? (i % 2 === 0 ? '#eff6ff10' : 'transparent') : (i % 2 === 0 ? '#fef3c710' : 'transparent') }}>
+              <div style={{ padding: '10px 14px', fontSize: '12px', fontWeight: '600', color: 'var(--ifm-color-content-secondary)' }}>{row.label}</div>
+              <div style={{ padding: '10px 14px', fontSize: '12px', borderLeft: '1px solid var(--ifm-color-emphasis-200)', fontWeight: mode === 'forward' ? '700' : '400', color: mode === 'forward' ? '#3b82f6' : 'var(--ifm-color-content-secondary)' }}>{row.forward}</div>
+              <div style={{ padding: '10px 14px', fontSize: '12px', borderLeft: '1px solid var(--ifm-color-emphasis-200)', fontWeight: mode === 'redirect' ? '700' : '400', color: mode === 'redirect' ? '#f59e0b' : 'var(--ifm-color-content-secondary)' }}>{row.redirect}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+오늘은 HTTP/HTTPS 개념을 정리하고, Tomcat 기반 서블릿 프로젝트에서 **로그인·로그아웃·마이페이지·정보수정·회원탈퇴·회원가입**까지 구현했다. 핵심 구조는 **요청 → 서블릿 → DAO/DB → 스코프 저장 → JSP 포워드/리다이렉트** 반복이다.
+
+<!-- truncate -->
+
+## HTTP 메서드와 데이터 위치
+
+프로토콜은 통신 규칙이다. 웹에서는 HTTP/HTTPS를 사용하며, 요청 메서드가 목적을 결정한다.
+
+- **GET**: URL 쿼리스트링으로 전달 — 캐싱 가능, 민감 데이터 절대 금지
+- **POST**: Body로 전달 — 숨김 전송, 대용량 가능, `Content-Type` 헤더 필수
+- **PUT/PATCH**: 수정(전체/부분), **DELETE**: 삭제
+
+강의에서는 실습 단계를 GET/POST 중심으로 단순화했다. 브라우저 주소창으로는 GET만 직접 테스트 가능하므로 POST 이후는 Postman을 활용한다.
+
+<HttpMethodCompare />
+
+### HTTP 상태 코드
+
+| 코드 | 의미 | 주요 상황 |
+|---|---|---|
+| **200** | 성공 | 정상 처리 |
+| **302** | 리다이렉트 | `sendRedirect()` 응답 |
+| **404** | 리소스 없음 | URL/엔드포인트 미존재 |
+| **500** | 서버 오류 | 서블릿 내부 예외 |
+
+Postman에서는 화면(JSP) 없이도 **상태 코드로 정상 처리 여부를 우선 확인**한다.
+
+---
+
+## 서블릿 컨트롤러 설계 (맵핑 테이블)
+
+엑셀 설계서를 기준으로 컨트롤러 패키지에 서블릿을 생성한다. 기능별 GET/POST 배분 기준은 간단하다.
+
+> 조회·화면 이동 → **GET**, 입력·저장 → **POST**
+
+```java
+@WebServlet("/login")
+public class LoginServlet extends HttpServlet {
+
+    @Override
+    protected void doGet(HttpServletRequest request, HttpServletResponse response) {
+        // 로그아웃: GET /login → session.invalidate() → 루트로 리다이렉트
+    }
+
+    @Override
+    protected void doPost(HttpServletRequest request, HttpServletResponse response) {
+        // 로그인: POST /login → id/pw 수신 → DAO → 세션 저장
+    }
+}
+```
+
+ID 중복 검사처럼 GET/POST 모두 허용이 필요한 경우 동일 로직을 두 번 쓰지 않고 **private 메서드로 위임**한다.
+
+```java
+@Override protected void doGet(HttpServletRequest req, HttpServletResponse res) throws ServletException, IOException {
+    process(req, res);
+}
+@Override protected void doPost(HttpServletRequest req, HttpServletResponse res) throws ServletException, IOException {
+    process(req, res);
+}
+// 중복 로직을 단일 private 메서드로 통합
+private void process(HttpServletRequest req, HttpServletResponse res) { ... }
+```
+
+서블릿 흐름을 직접 체험해보자.
+
+<ServletFlowViz />
+
+---
+
+## 인코딩 처리 — 가장 먼저
+
+모든 서블릿에서 첫 번째로 처리할 것은 **인코딩**이다. 한글 깨짐을 방지한다.
+
+```java
+// 클라이언트 → 서버 (POST 요청 파라미터)
+request.setCharacterEncoding("UTF-8");
+
+// 서버 → 클라이언트 (응답 HTML)
+response.setContentType("text/html; charset=UTF-8");
+```
+
+> Spring Boot에서는 `application.properties`의 `server.servlet.encoding.charset=UTF-8` 한 줄로 해결된다. 서블릿은 매 요청마다 직접 설정해야 한다는 차이가 있다.
+
+---
+
+## Request / Session 스코프
+
+서블릿에서 JSP로 값을 넘길 때 **스코프(scope)** 개념이 핵심이다.
+
+| 스코프 | 유효 범위 | 저장 | 삭제 |
+|---|---|---|---|
+| **Request** | 한 번의 forward 범위 | `request.setAttribute(k, v)` | redirect 시 자동 소멸 |
+| **Session** | 로그인 ~ 로그아웃 전체 | `session.setAttribute(k, v)` | `session.invalidate()` |
+
+- JSP에서는 EL `${key}`로 꺼낸다.
+- 스코프에서 꺼낸 값은 `Object` 타입 → **다운캐스팅 필요**
+
+```java
+HttpSession session = request.getSession();
+LoginDto loginDto = (LoginDto) session.getAttribute("loginDto"); // 다운캐스팅
+```
+
+직접 체험해보자.
+
+<ScopeSimulator />
+
+---
+
+## web-inf 보안 영역 & forward/redirect
+
+`web-inf` 폴더는 **외부 URL로 직접 접근이 차단**되는 보안 영역이다. 마이페이지, 내부 결과 화면, 오류 페이지는 여기에 두고 서블릿을 통해서만 진입시킨다.
+
+```
+webapp/
+├── index.jsp          ← 직접 접근 가능 (공개 페이지)
+└── WEB-INF/
+    └── views/
+        ├── main.jsp       ← 직접 접근 불가 → forward로만 이동
+        ├── userInfo.jsp
+        └── error/
+            └── error.html
+```
+
+<ForwardRedirectViz />
+
+```java
+// forward — 서버 내부 이동, request 유지
+RequestDispatcher rd = request.getRequestDispatcher("/WEB-INF/views/userInfo.jsp");
+rd.forward(request, response);
+
+// redirect — 클라이언트에게 새 URL 요청 지시, request 초기화
+response.sendRedirect("/");
+```
+
+---
+
+## 로그인 구현 흐름
+
+```java
+@Override
+protected void doPost(HttpServletRequest request, HttpServletResponse response)
+        throws ServletException, IOException {
+
+    request.setCharacterEncoding("UTF-8");
+    response.setContentType("text/html; charset=UTF-8");
+
+    String id = request.getParameter("id");
+    String pw = request.getParameter("pw");
+
+    LoginDto loginDto = new LoginDto(id, pw);
+    LoginDto result = dao.login(loginDto); // DB 조회
+
+    if (result != null) {
+        // 성공: Session에 저장 후 메인 JSP로 포워드
+        HttpSession session = request.getSession();
+        session.setAttribute("loginDto", result);
+        RequestDispatcher rd = request.getRequestDispatcher("/WEB-INF/views/main.jsp");
+        rd.forward(request, response);
+    } else {
+        // 실패: 스크립트로 alert 후 뒤로 가기
+        PrintWriter out = response.getWriter();
+        out.println("<script>alert('로그인 실패'); history.back();</script>");
+    }
+}
+```
+
+Postman에서 `x-www-form-urlencoded`로 `id`, `pw` 값을 보내면 성공 시 쿠키에 **JSESSIONID**가 저장된다. 이후 요청에서 이 쿠키가 자동 전송되어 세션이 유지된다.
+
+### 로그아웃
+
+```java
+@Override
+protected void doGet(HttpServletRequest request, HttpServletResponse response)
+        throws ServletException, IOException {
+    HttpSession session = request.getSession(false); // 없으면 null 반환
+    if (session != null) session.invalidate();
+    response.sendRedirect("/");
+}
+```
+
+---
+
+## 사용자 정보 수정 — Builder 패턴 활용
+
+수정 기능은 GET(폼 이동)과 POST(반영)를 분리한다. 일부 필드만 변경될 수 있으므로 **Builder 패턴**으로 DTO를 구성한다.
+
+```java
+@Override
+protected void doPost(HttpServletRequest request, HttpServletResponse response)
+        throws ServletException, IOException {
+
+    request.setCharacterEncoding("UTF-8");
+
+    HttpSession session = request.getSession(false);
+    if (session == null) { response.sendRedirect("/"); return; }
+
+    LoginDto loginDto = (LoginDto) session.getAttribute("loginDto");
+    String email    = request.getParameter("email");
+    String password = request.getParameter("password");
+
+    // 빈 문자열 처리 후 Builder로 DTO 조립
+    UserModifyDto dto = UserModifyDto.builder()
+            .id(loginDto.getId())
+            .email(email.isEmpty() ? null : email)
+            .password(password.isEmpty() ? null : password)
+            .build();
+
+    int cnt = dao.updateUser(dto);
+    if (cnt > 0) {
+        session.invalidate(); // 수정 후 세션 초기화
+        response.sendRedirect("/");
+    } else {
+        response.sendRedirect("/userModify"); // 실패 → 폼 재표시
+    }
+}
+```
+
+---
+
+## 회원 탈퇴 — 논리 삭제 & 오류 페이지
+
+실무에서 사용자 삭제는 **물리 삭제가 아니라 `enable` 플래그 변경**(논리 삭제)으로 처리한다.
+
+```java
+// DAO 내부: DELETE가 아니라 UPDATE
+UPDATE users SET enable = 'N' WHERE id = ?
+```
+
+오류 페이지는 `web-inf`에 두고, `meta refresh`로 일정 시간 후 자동 이동을 구현한다.
+
+```html
+<!-- WEB-INF/views/error/error.html -->
+<meta http-equiv="refresh" content="3; url=/">
+<p>오류가 발생했습니다. 3초 후 홈으로 이동합니다.</p>
+```
+
+---
+
+## Lombok @Slf4j 로그 설정
+
+매 클래스마다 Logger를 생성하는 반복 코드를 `@Slf4j`로 제거한다.
+
+```java
+// Before — 반복 선언
+private static final Logger log = LoggerFactory.getLogger(LoginServlet.class);
+
+// After — @Slf4j 어노테이션 하나로 해결
+@Slf4j
+public class LoginServlet extends HttpServlet {
+    // log.info(), log.debug(), log.error() 바로 사용 가능
+}
+```
+
+동작 조건: Lombok + `slf4j-api` 의존성이 모두 있어야 한다.
+
+```xml
+<!-- pom.xml -->
+<dependency>
+    <groupId>org.slf4j</groupId>
+    <artifactId>slf4j-api</artifactId>
+    <version>2.0.x</version>
+</dependency>
+```
+
+---
+
+## 정리
+
+오늘 구현한 기능의 공통 패턴은 단 하나다.
+
+```
+요청 수신 (doGet/doPost)
+  → 인코딩 설정
+  → 세션 유효성 확인 (필요 시)
+  → 파라미터 수신 → DTO 구성
+  → DAO 실행
+  → 성공: 스코프 저장 + forward / redirect
+  → 실패: 스크립트 alert 또는 error 페이지 forward
+```
+
+세션 체크 로직이 서블릿마다 중복되는 문제는 추후 **Filter로 공통화**하면 해결된다. 전체 기능 구축 후 리팩토링 대상이다.
