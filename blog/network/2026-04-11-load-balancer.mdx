@@ -1,0 +1,694 @@
+---
+title: "L4 vs L7 로드밸런서 — OSI 계층으로 이해하는 트래픽 분산"
+date: 2026-04-11
+authors: HyungJun
+tags: [네트워크, 기초이론, 인프라]
+---
+
+import { useState, useRef } from 'react';
+
+트래픽이 폭발적으로 증가할 때 단일 서버는 반드시 한계에 부딪힙니다. 로드밸런서는 이 문제를 해결하는 핵심 인프라입니다. OSI 7계층 구조와 함께 L4/L7 로드밸런서의 동작 원리와 차이를 직접 체험하며 이해해봅니다.
+
+<!-- truncate -->
+
+export function OSILayerViz() {
+  const [selected, setSelected] = useState(null);
+
+  const layers = [
+    {
+      num: 7, name: '응용 계층', en: 'Application',
+      protocols: 'HTTP, HTTPS, FTP, DNS, SMTP',
+      color: '#e74c3c',
+      detail: 'URL 경로, HTTP 헤더, 쿠키, 요청 본문까지 해석합니다.',
+      lbLabel: 'L7 LB',
+    },
+    {
+      num: 6, name: '표현 계층', en: 'Presentation',
+      protocols: 'SSL/TLS, JPEG, JSON, Base64',
+      color: '#e67e22',
+      detail: '데이터의 인코딩, 암호화, 압축을 담당합니다.',
+    },
+    {
+      num: 5, name: '세션 계층', en: 'Session',
+      protocols: 'TLS 세션, NetBIOS, RPC',
+      color: '#f39c12',
+      detail: '통신 세션의 시작·유지·종료를 관리합니다.',
+    },
+    {
+      num: 4, name: '전송 계층', en: 'Transport',
+      protocols: 'TCP, UDP',
+      color: '#27ae60',
+      detail: 'IP + 포트 번호로 프로세스를 식별합니다. 패킷을 실제로 열어보지 않고 라우팅합니다.',
+      lbLabel: 'L4 LB',
+    },
+    {
+      num: 3, name: '네트워크 계층', en: 'Network',
+      protocols: 'IP, ICMP, ARP',
+      color: '#2980b9',
+      detail: 'IP 주소 기반으로 패킷 경로(라우팅)를 결정합니다.',
+    },
+    {
+      num: 2, name: '데이터링크 계층', en: 'Data Link',
+      protocols: 'Ethernet, Wi-Fi (802.11)',
+      color: '#8e44ad',
+      detail: 'MAC 주소로 같은 네트워크 내 노드를 식별합니다.',
+    },
+    {
+      num: 1, name: '물리 계층', en: 'Physical',
+      protocols: '케이블, 허브, 리피터, 광섬유',
+      color: '#7f8c8d',
+      detail: '비트를 전기·광 신호로 변환하여 전송합니다.',
+    },
+  ];
+
+  const units = ['비트', '프레임', '패킷', '세그먼트', 'Data', 'Data', 'Data'];
+  const devices = ['케이블·허브', '스위치', '라우터', '방화벽·LB', '—', '—', '브라우저·앱'];
+
+  return (
+    <div style={{ margin: '24px 0', fontFamily: 'monospace' }}>
+      <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', alignItems: 'flex-start' }}>
+        {/* 계층 목록 */}
+        <div style={{ flex: '1', minWidth: '260px' }}>
+          {layers.map((layer, i) => {
+            const isSelected = selected?.num === layer.num;
+            return (
+              <div
+                key={layer.num}
+                onClick={() => setSelected(isSelected ? null : layer)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '12px',
+                  padding: '10px 14px',
+                  marginBottom: '4px',
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                  background: isSelected ? layer.color + '20' : 'var(--ifm-card-background-color)',
+                  border: `2px solid ${layer.lbLabel ? layer.color : 'var(--ifm-color-emphasis-200)'}`,
+                  outline: isSelected ? `2px solid ${layer.color}` : 'none',
+                  transition: 'all 0.15s',
+                  userSelect: 'none',
+                }}
+              >
+                <div style={{
+                  width: '32px', height: '32px', borderRadius: '6px',
+                  background: layer.color, flexShrink: 0,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  color: '#fff', fontWeight: 900, fontSize: '14px',
+                }}>
+                  {layer.num}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: '14px', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                    {layer.name}
+                    {layer.lbLabel && (
+                      <span style={{
+                        fontSize: '10px', padding: '2px 7px', borderRadius: '4px',
+                        background: layer.color, color: '#fff', fontWeight: 800,
+                      }}>
+                        {layer.lbLabel}
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ fontSize: '11px', color: 'var(--ifm-color-emphasis-600)', marginTop: '1px' }}>
+                    {layer.en} · {layer.protocols.split(',')[0].trim()}{layer.protocols.includes(',') ? ' ...' : ''}
+                  </div>
+                </div>
+                <div style={{ fontSize: '10px', color: 'var(--ifm-color-emphasis-400)', textAlign: 'right', flexShrink: 0 }}>
+                  {units[7 - layer.num]}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* 선택된 계층 상세 */}
+        <div style={{ flex: '1', minWidth: '220px' }}>
+          {selected ? (
+            <div style={{
+              padding: '20px', borderRadius: '12px',
+              background: selected.color + '12',
+              border: `2px solid ${selected.color}`,
+              height: '100%',
+            }}>
+              <div style={{ fontSize: '36px', fontWeight: 900, color: selected.color, lineHeight: 1 }}>
+                L{selected.num}
+              </div>
+              <div style={{ fontSize: '18px', fontWeight: 700, marginTop: '4px', marginBottom: '12px' }}>
+                {selected.name} <span style={{ fontSize: '13px', color: 'var(--ifm-color-emphasis-600)' }}>({selected.en})</span>
+              </div>
+              <div style={{ fontSize: '12px', color: 'var(--ifm-color-emphasis-600)', marginBottom: '8px' }}>
+                <b>주요 프로토콜:</b> {selected.protocols}
+              </div>
+              <div style={{ fontSize: '12px', color: 'var(--ifm-color-emphasis-600)', marginBottom: '8px' }}>
+                <b>대표 장비:</b> {devices[7 - selected.num]}
+              </div>
+              <div style={{ fontSize: '13px', color: 'var(--ifm-color-emphasis-800)', marginTop: '12px', lineHeight: 1.6 }}>
+                {selected.detail}
+              </div>
+              {selected.lbLabel && (
+                <div style={{
+                  marginTop: '14px', padding: '10px 14px', borderRadius: '8px',
+                  background: selected.color + '20', fontSize: '13px', fontWeight: 700, color: selected.color,
+                }}>
+                  ✦ {selected.lbLabel === 'L4 LB'
+                    ? 'L4 로드밸런서는 이 계층에서 IP + 포트만 보고 서버를 선택합니다.'
+                    : 'L7 로드밸런서는 이 계층에서 URL, 헤더, 쿠키까지 읽고 라우팅합니다.'}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div style={{
+              padding: '20px', borderRadius: '12px', height: '100%',
+              background: 'var(--ifm-color-emphasis-100)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              color: 'var(--ifm-color-emphasis-500)', fontSize: '13px', textAlign: 'center',
+              border: '2px dashed var(--ifm-color-emphasis-300)',
+              minHeight: '180px',
+            }}>
+              ← 계층을 클릭하면<br />상세 정보가 표시됩니다.<br /><br />
+              <span style={{ fontSize: '11px' }}>테두리가 있는 계층이<br />로드밸런서 동작 계층입니다.</span>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function RoutingSimulator() {
+  const [urlPath, setUrlPath] = useState('/api/users');
+  const [result, setResult] = useState(null);
+  const [animating, setAnimating] = useState(false);
+  const rrRef = useRef(0);
+
+  const servers = [
+    { id: 'api-1',    label: 'API Server 1',    color: '#3498db' },
+    { id: 'api-2',    label: 'API Server 2',    color: '#2980b9' },
+    { id: 'image',    label: 'Image Server',    color: '#e74c3c' },
+    { id: 'static',   label: 'Static Server',   color: '#27ae60' },
+    { id: 'admin',    label: 'Admin Server',    color: '#9b59b6' },
+  ];
+
+  const l7Rules = [
+    { pattern: '/api',    targets: ['api-1', 'api-2'], label: '/api/*' },
+    { pattern: '/images', targets: ['image'],           label: '/images/*' },
+    { pattern: '/static', targets: ['static'],          label: '/static/*' },
+    { pattern: '/admin',  targets: ['admin'],           label: '/admin/*' },
+  ];
+
+  const paths = ['/api/users', '/api/orders', '/api/products', '/images/logo.png', '/images/banner.jpg', '/static/app.js', '/admin/dashboard'];
+
+  const simulate = () => {
+    if (animating) return;
+    setAnimating(true);
+
+    // L4: 라운드 로빈으로 아무 서버 (URL 경로 무관)
+    const allIds = servers.map(s => s.id);
+    const l4Id = allIds[rrRef.current % allIds.length];
+    rrRef.current += 1;
+
+    // L7: 경로 매칭
+    const rule = l7Rules.find(r => urlPath.startsWith(r.pattern));
+    const l7Targets = rule ? rule.targets : ['api-1', 'api-2'];
+    const l7Id = l7Targets[Math.floor(Math.random() * l7Targets.length)];
+
+    setTimeout(() => {
+      setResult({ l4: l4Id, l7: l7Id, path: urlPath });
+      setAnimating(false);
+    }, 400);
+  };
+
+  const getServer = (id) => servers.find(s => s.id === id);
+
+  return (
+    <div style={{ margin: '24px 0', fontFamily: 'monospace' }}>
+      {/* 요청 설정 */}
+      <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: '16px' }}>
+        <div style={{ flex: '1', minWidth: '180px' }}>
+          <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--ifm-color-emphasis-600)', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            URL 경로
+          </div>
+          <select
+            value={urlPath}
+            onChange={e => { setUrlPath(e.target.value); setResult(null); }}
+            style={{
+              width: '100%', padding: '9px 12px',
+              borderRadius: '7px', border: '1px solid var(--ifm-color-emphasis-300)',
+              background: 'var(--ifm-card-background-color)', color: 'inherit',
+              fontFamily: 'monospace', fontSize: '13px',
+            }}
+          >
+            {paths.map(p => <option key={p} value={p}>{p}</option>)}
+          </select>
+        </div>
+        <button
+          onClick={simulate}
+          disabled={animating}
+          style={{
+            padding: '10px 22px', borderRadius: '8px', border: 'none',
+            background: animating ? 'var(--ifm-color-emphasis-300)' : '#3498db',
+            color: '#fff', fontWeight: 700, fontSize: '14px',
+            cursor: animating ? 'not-allowed' : 'pointer', transition: 'all 0.2s',
+            flexShrink: 0,
+          }}
+        >
+          {animating ? '전송 중...' : '요청 전송'}
+        </button>
+      </div>
+
+      {/* 결과 비교 */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
+        {/* L4 */}
+        <div style={{
+          padding: '16px', borderRadius: '10px',
+          background: '#27ae6012', border: '2px solid #27ae60',
+        }}>
+          <div style={{ fontSize: '11px', fontWeight: 800, color: '#27ae60', letterSpacing: '0.05em', marginBottom: '10px', textTransform: 'uppercase' }}>
+            L4 로드밸런서 (전송 계층)
+          </div>
+          <div style={{ fontSize: '12px', color: 'var(--ifm-color-emphasis-600)', lineHeight: 1.8 }}>
+            <div>인식 정보:</div>
+            <div style={{ marginLeft: '8px' }}>✅ IP 주소</div>
+            <div style={{ marginLeft: '8px' }}>✅ 포트 번호</div>
+            <div style={{ marginLeft: '8px' }}>❌ URL 경로 <span style={{ color: 'var(--ifm-color-emphasis-400)' }}>(알 수 없음)</span></div>
+          </div>
+          {result && (
+            <div style={{
+              marginTop: '12px', padding: '10px 12px', borderRadius: '7px',
+              background: getServer(result.l4).color + '25',
+              border: `1px solid ${getServer(result.l4).color}`,
+            }}>
+              <div style={{ fontSize: '11px', color: 'var(--ifm-color-emphasis-500)', marginBottom: '2px' }}>라운드 로빈으로 선택:</div>
+              <div style={{ fontSize: '14px', fontWeight: 800, color: getServer(result.l4).color }}>
+                → {getServer(result.l4).label}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* L7 */}
+        <div style={{
+          padding: '16px', borderRadius: '10px',
+          background: '#e74c3c12', border: '2px solid #e74c3c',
+        }}>
+          <div style={{ fontSize: '11px', fontWeight: 800, color: '#e74c3c', letterSpacing: '0.05em', marginBottom: '10px', textTransform: 'uppercase' }}>
+            L7 로드밸런서 (응용 계층)
+          </div>
+          <div style={{ fontSize: '12px', color: 'var(--ifm-color-emphasis-600)', lineHeight: 1.8 }}>
+            <div>인식 정보:</div>
+            <div style={{ marginLeft: '8px' }}>✅ IP 주소</div>
+            <div style={{ marginLeft: '8px' }}>✅ 포트 번호</div>
+            <div style={{ marginLeft: '8px' }}>✅ URL 경로 <code style={{ fontSize: '11px' }}>{urlPath}</code></div>
+          </div>
+          {result && (
+            <div style={{
+              marginTop: '12px', padding: '10px 12px', borderRadius: '7px',
+              background: getServer(result.l7).color + '25',
+              border: `1px solid ${getServer(result.l7).color}`,
+            }}>
+              <div style={{ fontSize: '11px', color: 'var(--ifm-color-emphasis-500)', marginBottom: '2px' }}>경로 규칙으로 선택:</div>
+              <div style={{ fontSize: '14px', fontWeight: 800, color: getServer(result.l7).color }}>
+                → {getServer(result.l7).label}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* 라우팅 규칙 */}
+      <div style={{
+        marginTop: '12px', padding: '10px 14px', borderRadius: '8px',
+        background: 'var(--ifm-code-background)', fontSize: '12px',
+        display: 'flex', gap: '16px', flexWrap: 'wrap',
+      }}>
+        <span style={{ color: 'var(--ifm-color-emphasis-500)', fontWeight: 600 }}>L7 라우팅 규칙:</span>
+        {l7Rules.map(r => (
+          <span key={r.label} style={{ color: 'var(--ifm-color-primary)' }}>
+            {r.label} → {r.targets.join(', ')}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function LBAlgorithmDemo() {
+  const COLORS = ['#3498db', '#27ae60', '#e74c3c', '#9b59b6'];
+  const INITIAL = [
+    { id: 0, name: 'Server A', connections: 0, weight: 1 },
+    { id: 1, name: 'Server B', connections: 0, weight: 3 },
+    { id: 2, name: 'Server C', connections: 0, weight: 1 },
+    { id: 3, name: 'Server D', connections: 0, weight: 2 },
+  ];
+
+  const [algo, setAlgo] = useState('round-robin');
+  const [servers, setServers] = useState(INITIAL.map(s => ({ ...s })));
+  const [logs, setLogs] = useState([]);
+  const rrIdxRef = useRef(0);
+  const reqCountRef = useRef(0);
+  const clientIpRef = useRef(0);
+
+  const reset = () => {
+    setServers(INITIAL.map(s => ({ ...s })));
+    setLogs([]);
+    rrIdxRef.current = 0;
+    reqCountRef.current = 0;
+    clientIpRef.current = 0;
+  };
+
+  const sendRequest = () => {
+    let targetIdx;
+    const current = servers;
+
+    if (algo === 'round-robin') {
+      targetIdx = rrIdxRef.current % current.length;
+      rrIdxRef.current += 1;
+    } else if (algo === 'least-conn') {
+      targetIdx = current.reduce((minI, s, i) =>
+        s.connections < current[minI].connections ? i : minI, 0);
+    } else if (algo === 'ip-hash') {
+      targetIdx = clientIpRef.current % current.length;
+      clientIpRef.current = (clientIpRef.current + 1) % 20;
+    } else {
+      // weighted random
+      const totalW = current.reduce((a, s) => a + s.weight, 0);
+      let rand = Math.random() * totalW;
+      targetIdx = 0;
+      for (let i = 0; i < current.length; i++) {
+        rand -= current[i].weight;
+        if (rand <= 0) { targetIdx = i; break; }
+      }
+    }
+
+    reqCountRef.current += 1;
+    const reqNum = reqCountRef.current;
+    const target = current[targetIdx];
+    setServers(prev => prev.map((s, i) =>
+      i === targetIdx ? { ...s, connections: s.connections + 1 } : s
+    ));
+    setLogs(prev => [
+      { req: reqNum, server: target.name, color: COLORS[targetIdx] },
+      ...prev,
+    ].slice(0, 7));
+  };
+
+  const maxConn = Math.max(...servers.map(s => s.connections), 1);
+
+  const algos = [
+    { key: 'round-robin', label: '라운드 로빈', desc: '순서대로 분배. 서버 스펙이 동일할 때 가장 간단하고 효율적.' },
+    { key: 'least-conn',  label: '최소 연결',   desc: '현재 연결 수가 가장 적은 서버로 전달. 처리 시간이 불균일할 때 유리.' },
+    { key: 'ip-hash',     label: 'IP 해시',     desc: '동일 IP는 항상 같은 서버. 세션 일관성이 필요할 때 사용.' },
+    { key: 'weighted',    label: '가중치 RR',   desc: 'Server B(3x), D(2x) 가중치로 더 많은 요청 수신. 사양이 다른 서버 혼합 시.' },
+  ];
+
+  return (
+    <div style={{ margin: '24px 0', fontFamily: 'monospace' }}>
+      {/* 알고리즘 선택 */}
+      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '16px' }}>
+        {algos.map(a => (
+          <button
+            key={a.key}
+            onClick={() => { setAlgo(a.key); reset(); }}
+            style={{
+              padding: '7px 14px', borderRadius: '6px', cursor: 'pointer',
+              border: `2px solid ${algo === a.key ? '#3498db' : 'var(--ifm-color-emphasis-300)'}`,
+              background: algo === a.key ? '#3498db' : 'transparent',
+              color: algo === a.key ? '#fff' : 'inherit',
+              fontWeight: 700, fontSize: '13px', fontFamily: 'monospace',
+            }}
+          >
+            {a.label}
+          </button>
+        ))}
+      </div>
+
+      {/* 설명 */}
+      <div style={{
+        marginBottom: '16px', padding: '10px 14px', borderRadius: '8px',
+        background: '#3498db14', border: '1px solid #3498db40',
+        fontSize: '13px', color: 'var(--ifm-color-emphasis-700)',
+      }}>
+        {algos.find(a => a.key === algo)?.desc}
+      </div>
+
+      {/* 버튼 */}
+      <div style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>
+        <button
+          onClick={sendRequest}
+          style={{
+            padding: '10px 22px', borderRadius: '8px', border: 'none',
+            background: '#27ae60', color: '#fff',
+            fontWeight: 700, fontSize: '14px', cursor: 'pointer',
+          }}
+        >
+          요청 전송
+        </button>
+        <button
+          onClick={reset}
+          style={{
+            padding: '10px 18px', borderRadius: '8px', cursor: 'pointer',
+            border: '1px solid var(--ifm-color-emphasis-300)',
+            background: 'transparent', color: 'inherit',
+            fontWeight: 600, fontSize: '13px', fontFamily: 'monospace',
+          }}
+        >
+          초기화
+        </button>
+      </div>
+
+      {/* 서버 바 차트 */}
+      <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-end', marginBottom: '16px' }}>
+        {servers.map((sv, i) => (
+          <div key={sv.id} style={{ flex: 1, textAlign: 'center' }}>
+            <div style={{ fontSize: '22px', fontWeight: 900, color: COLORS[i], marginBottom: '4px' }}>
+              {sv.connections}
+            </div>
+            <div style={{
+              height: '120px', borderRadius: '7px',
+              background: 'var(--ifm-color-emphasis-100)',
+              overflow: 'hidden', display: 'flex', alignItems: 'flex-end',
+            }}>
+              <div style={{
+                width: '100%',
+                height: `${(sv.connections / maxConn) * 100}%`,
+                background: COLORS[i],
+                transition: 'height 0.35s cubic-bezier(0.34,1.56,0.64,1)',
+                borderRadius: '7px 7px 0 0',
+              }} />
+            </div>
+            <div style={{ fontSize: '12px', fontWeight: 700, marginTop: '6px' }}>{sv.name}</div>
+            {algo === 'weighted' && (
+              <div style={{ fontSize: '11px', color: COLORS[i], fontWeight: 700 }}>×{sv.weight}</div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* 로그 */}
+      {logs.length > 0 && (
+        <div style={{
+          padding: '12px 14px', borderRadius: '8px',
+          background: 'var(--ifm-code-background)', fontSize: '12px', lineHeight: 1.8,
+        }}>
+          {logs.map((log, i) => (
+            <div key={log.req} style={{
+              color: i === 0 ? log.color : 'var(--ifm-color-emphasis-500)',
+              fontWeight: i === 0 ? 700 : 400,
+            }}>
+              req #{log.req} → {log.server}{i === 0 ? ' ◀ 최신' : ''}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+---
+
+## 왜 로드밸런서가 필요한가?
+
+단일 서버 구조의 한계는 명확합니다.
+
+- **단일 장애점(SPOF)**: 서버 하나가 다운되면 전체 서비스가 중단됩니다.
+- **수직 확장의 한계**: CPU·메모리 업그레이드는 비용 대비 효과가 제한적입니다.
+- **핫스팟 문제**: 특정 시간대 트래픽 폭증 시 단일 서버로 감당 불가능합니다.
+
+로드밸런서는 들어오는 트래픽을 여러 서버에 분산시켜 이 세 가지 문제를 동시에 해결합니다.
+
+---
+
+## OSI 7계층과 로드밸런서의 위치
+
+OSI(Open Systems Interconnection) 모델은 네트워크 통신을 7개 계층으로 추상화한 국제 표준입니다. 로드밸런서는 **어느 계층에서 트래픽을 분석하느냐**에 따라 L4와 L7로 구분됩니다.
+
+<OSILayerViz />
+
+핵심은 **"어디까지 패킷을 열어보느냐"** 입니다.
+- **L4 LB**: 4계층(전송)까지만 — IP + 포트만 확인하고 라우팅
+- **L7 LB**: 7계층(응용)까지 — HTTP URL, 헤더, 쿠키까지 해석 후 라우팅
+
+---
+
+## L4 로드밸런서 (전송 계층)
+
+**4계층(Transport Layer)에서 IP 주소 + 포트 번호를 기준으로 트래픽을 분산합니다.**
+
+HTTP 패킷의 내용을 열어보지 않기 때문에 처리 속도가 매우 빠릅니다.
+
+**동작 방식**
+- 클라이언트 IP: `203.0.113.45`
+- 목적지 포트: `443`
+- 이 두 정보만으로 백엔드 서버를 선택 → 패킷 전달
+
+**특징**
+
+| 항목 | 설명 |
+|------|------|
+| 분배 기준 | IP 주소 + 포트 번호 |
+| 프로토콜 | TCP, UDP 모두 지원 |
+| 처리 속도 | 매우 빠름 (패킷 미개봉) |
+| 콘텐츠 인식 | ❌ 불가 |
+| SSL 처리 | 클라이언트-서버 간 직접 암호화 |
+
+**적합한 사용 사례**
+- 게임 서버 (UDP, 초저지연 필요)
+- 데이터베이스 클러스터 (MySQL 3306, Redis 6379)
+- 대용량 파일 전송
+- 실시간 스트리밍
+
+AWS 서비스: **NLB (Network Load Balancer)**
+
+---
+
+## L7 로드밸런서 (응용 계층)
+
+**7계층(Application Layer)에서 HTTP 요청의 URL, 헤더, 쿠키까지 분석해 라우팅합니다.**
+
+패킷을 완전히 복호화하여 내용을 해석하기 때문에 훨씬 정교한 분산이 가능합니다.
+
+**동작 방식**
+```
+GET /api/users HTTP/1.1
+Host: api.example.com
+Cookie: session=abc123
+
+→ URL 경로 /api/* 규칙 매칭 → API 서버 풀로 라우팅
+```
+
+**특징**
+
+| 항목 | 설명 |
+|------|------|
+| 분배 기준 | URL 경로, HTTP 헤더, 쿠키, 메서드 |
+| 프로토콜 | HTTP, HTTPS, WebSocket |
+| 처리 속도 | 상대적으로 느림 (패킷 개봉·해석) |
+| 콘텐츠 인식 | ✅ 가능 |
+| SSL 처리 | LB에서 SSL 종료(Termination) 후 평문 전달 |
+
+**L7만 가능한 기능들**
+- **경로 기반 라우팅**: `/api/*` → API 서버, `/static/*` → CDN
+- **헤더 기반 라우팅**: `X-Country: KR` → 국내 서버
+- **A/B 테스트**: 특정 쿠키가 있는 사용자 → 신규 버전 서버
+- **Rate Limiting**: IP별, 사용자별 요청 수 제한
+- **WAF(Web Application Firewall)** 연동
+
+AWS 서비스: **ALB (Application Load Balancer)**
+
+---
+
+## L4 vs L7 라우팅 시뮬레이터
+
+동일한 요청이 L4와 L7 로드밸런서에 도달했을 때 각각 어떻게 서버를 선택하는지 직접 확인해보세요.
+
+<RoutingSimulator />
+
+L4는 URL을 전혀 볼 수 없어 라운드 로빈으로 임의 서버에 분배합니다. L7은 `/images/*` 경로라면 반드시 Image Server로, `/admin/*`이라면 Admin Server로만 전달합니다. 이것이 **마이크로서비스 아키텍처에서 L7이 필수인 이유**입니다.
+
+---
+
+## 로드밸런싱 알고리즘
+
+서버를 선택하는 방식도 여러 가지입니다. L4와 L7 모두 아래 알고리즘 중 하나를 사용합니다.
+
+<LBAlgorithmDemo />
+
+**알고리즘 선택 기준**
+
+- **라운드 로빈** — 서버 스펙이 동일하고 요청 처리 시간이 비슷할 때. 가장 단순하고 예측 가능.
+- **최소 연결** — 요청마다 처리 시간이 크게 다를 때. 장시간 연결(WebSocket, 파일 업로드) 환경에서 효과적.
+- **IP 해시** — 같은 클라이언트가 항상 같은 서버에 연결되어야 할 때. 서버 사이드 세션 유지에 활용.
+- **가중치 라운드 로빈** — 서버 사양이 다를 때. 고성능 서버에 더 많은 트래픽 배분.
+
+---
+
+## 헬스 체크 (Health Check)
+
+로드밸런서가 죽은 서버로 트래픽을 보내면 사용자는 에러를 받습니다. 헬스 체크는 이를 방지합니다.
+
+```
+로드밸런서 → Server A: GET /health  →  200 OK     ✅ 정상
+로드밸런서 → Server B: GET /health  →  Timeout    ❌ 장애
+로드밸런서 → Server C: GET /health  →  503         ❌ 장애
+
+결과: Server A에만 트래픽 전달, B·C 자동 제외
+```
+
+**L4 헬스 체크**: TCP 포트가 열려있는지만 확인 (3-way Handshake 성공 여부)
+
+**L7 헬스 체크**: HTTP 요청을 보내 응답 코드·본문까지 검증
+```yaml
+# AWS ALB 헬스 체크 예시
+healthCheck:
+  path: /health
+  interval: 30s
+  timeout: 5s
+  healthyThreshold: 2    # 연속 2회 성공 시 정상 판정
+  unhealthyThreshold: 3  # 연속 3회 실패 시 제외
+```
+
+---
+
+## 세션 관리: Sticky Session vs Stateless
+
+L7 로드밸런서에서 자주 맞닥뜨리는 문제입니다. 사용자 A가 Server 1에서 로그인했는데 다음 요청이 Server 2로 가면 세션을 잃습니다.
+
+### 해결책 1 — Sticky Session (세션 고정)
+쿠키나 IP를 기반으로 같은 사용자는 항상 같은 서버로 보냅니다.
+
+```
+단점: 특정 서버에만 트래픽 몰림, 서버 장애 시 세션 전체 소멸
+```
+
+### 해결책 2 — Stateless + 외부 세션 저장소 (권장)
+서버는 상태를 갖지 않고, Redis 같은 외부 저장소에 세션을 저장합니다.
+
+```
+Client → LB → 아무 서버 → Redis에서 세션 조회 → 응답
+```
+
+실무에서는 **JWT + Redis** 조합으로 Stateless 아키텍처를 구성하는 것이 표준입니다.
+
+---
+
+## L4 vs L7 선택 가이드
+
+| 상황 | 선택 |
+|------|------|
+| 단순 TCP/UDP 부하 분산 (DB, 게임, 스트리밍) | **L4** |
+| 마이크로서비스 — 서비스별 URL 라우팅 | **L7** |
+| 초저지연, 최대 처리량이 최우선 | **L4** |
+| A/B 테스트, 카나리 배포 | **L7** |
+| WAF, Rate Limiting, 인증 처리 | **L7** |
+| SSL/TLS 중앙 관리 | **L7** (SSL Termination) |
+
+**실무 패턴**: 대규모 서비스는 L4 + L7을 계층적으로 조합합니다.
+
+```
+인터넷 → L4 LB (NLB) → L7 LB (ALB) → 마이크로서비스들
+           (첫 번째 방어선,               (URL 기반 세밀한 라우팅,
+            DDoS 완화)                    서비스별 분산)
+```
+
+정적 파일(이미지·JS·CSS)은 CDN이나 L4로, API 요청은 L7으로 분리하는 것이 가장 흔한 구성입니다.
