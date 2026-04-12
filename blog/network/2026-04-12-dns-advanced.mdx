@@ -1,0 +1,623 @@
+---
+title: "DNS 심화 — DNSSEC, Round Robin, CDN 연계, DoH/DoT"
+date: 2026-04-12
+authors: HyungJun
+tags: [네트워크, 기초이론, 인프라]
+---
+
+import { useState, useRef } from 'react';
+
+DNS는 1983년에 설계됐고, 처음부터 보안은 안중에 없었습니다. 응답을 위변조해도 클라이언트는 알 방법이 없고, 질의 내용은 평문으로 네트워크를 날아다닙니다. 이 포스트에서는 DNSSEC으로 응답을 검증하고, Round Robin의 한계를 직접 시뮬레이션하고, CDN이 DNS를 어떻게 활용하는지, 그리고 DoH/DoT로 질의 자체를 숨기는 원리까지 인터랙티브하게 다룹니다.
+
+<!-- truncate -->
+
+export function DNSSECChainViz() {
+  const [activeNode, setActiveNode] = useState(null);
+
+  const nodes = [
+    {
+      id: 'root',
+      label: '루트 존 (.)',
+      color: '#e74c3c',
+      records: ['DNSKEY (KSK + ZSK)', 'RRSIG (ZSK로 서명)', 'Trust Anchor'],
+      detail: '모든 신뢰의 시작점. ICANN이 관리하는 루트 존의 KSK 공개키는 전 세계 리졸버에 사전 내장됩니다 (Trust Anchor). 리졸버는 이 키를 신뢰의 닻으로 삼아 전체 체인을 검증합니다.',
+      arrow: '부모의 DS 레코드로 자식 검증',
+    },
+    {
+      id: 'com',
+      label: '.com 존',
+      color: '#e67e22',
+      records: ['DNSKEY (KSK + ZSK)', 'RRSIG', 'DS (루트가 서명)'],
+      detail: '.com TLD의 공개키(DNSKEY)를 해시한 DS 레코드가 루트 존에 등록됩니다. 리졸버는 루트의 ZSK로 이 DS를 검증하고, DS의 해시값과 .com의 DNSKEY가 일치하면 .com을 신뢰합니다.',
+      arrow: '부모의 DS 레코드로 자식 검증',
+    },
+    {
+      id: 'example',
+      label: 'example.com 존',
+      color: '#27ae60',
+      records: ['DNSKEY (KSK + ZSK)', 'RRSIG', 'DS (.com이 서명)', 'A / AAAA 레코드'],
+      detail: 'example.com의 실제 DNS 레코드(A, AAAA 등)는 ZSK로 서명된 RRSIG와 함께 반환됩니다. 리졸버가 이 RRSIG를 ZSK로 검증하면, 응답이 위변조되지 않았음을 수학적으로 증명합니다.',
+      arrow: null,
+    },
+  ];
+
+  const steps = [
+    { from: 'root', to: 'com', label: '루트의 DS → .com DNSKEY 검증' },
+    { from: 'com', to: 'example', label: '.com의 DS → example.com DNSKEY 검증' },
+  ];
+
+  return (
+    <div style={{ margin: '24px 0', fontFamily: 'monospace' }}>
+      <div style={{ fontSize: '12px', color: 'var(--ifm-color-emphasis-500)', marginBottom: '12px' }}>
+        ▶ 각 존을 클릭하면 레코드 상세를 확인할 수 있습니다
+      </div>
+      <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', alignItems: 'flex-start' }}>
+        {/* 체인 시각화 */}
+        <div style={{ flex: '1', minWidth: '240px' }}>
+          {nodes.map((node, i) => {
+            const isActive = activeNode?.id === node.id;
+            return (
+              <div key={node.id}>
+                <div
+                  onClick={() => setActiveNode(isActive ? null : node)}
+                  style={{
+                    padding: '14px 16px',
+                    borderRadius: '10px',
+                    cursor: 'pointer',
+                    border: `2px solid ${node.color}`,
+                    background: isActive ? node.color + '18' : 'var(--ifm-card-background-color)',
+                    outline: isActive ? `3px solid ${node.color}` : 'none',
+                    transition: 'all 0.15s',
+                    userSelect: 'none',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <div style={{
+                      width: '36px', height: '36px', borderRadius: '8px',
+                      background: node.color, color: '#fff', fontWeight: 900,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontSize: '16px', flexShrink: 0,
+                    }}>
+                      {i + 1}
+                    </div>
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: '14px' }}>{node.label}</div>
+                      <div style={{ fontSize: '11px', color: 'var(--ifm-color-emphasis-500)', marginTop: '2px' }}>
+                        {node.records.join(' · ')}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                {node.arrow && (
+                  <div style={{
+                    textAlign: 'center', fontSize: '11px', color: 'var(--ifm-color-emphasis-500)',
+                    padding: '4px 0', lineHeight: 1.4,
+                  }}>
+                    ↓ {steps[i].label}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* 상세 패널 */}
+        <div style={{ flex: '1', minWidth: '220px' }}>
+          {activeNode ? (
+            <div style={{
+              padding: '20px', borderRadius: '12px',
+              background: activeNode.color + '10',
+              border: `2px solid ${activeNode.color}`,
+            }}>
+              <div style={{ fontSize: '18px', fontWeight: 700, color: activeNode.color, marginBottom: '10px' }}>
+                {activeNode.label}
+              </div>
+              <div style={{ fontSize: '12px', color: 'var(--ifm-color-emphasis-600)', marginBottom: '12px' }}>
+                <b>포함 레코드:</b>
+                <ul style={{ margin: '6px 0 0', paddingLeft: '16px' }}>
+                  {activeNode.records.map(r => (
+                    <li key={r} style={{ marginBottom: '3px' }}>{r}</li>
+                  ))}
+                </ul>
+              </div>
+              <div style={{
+                fontSize: '13px', lineHeight: 1.7,
+                color: 'var(--ifm-color-emphasis-800)',
+                borderTop: `1px solid ${activeNode.color}40`,
+                paddingTop: '12px',
+              }}>
+                {activeNode.detail}
+              </div>
+            </div>
+          ) : (
+            <div style={{
+              padding: '20px', borderRadius: '12px',
+              background: 'var(--ifm-color-emphasis-100)',
+              border: '2px dashed var(--ifm-color-emphasis-300)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              minHeight: '180px', color: 'var(--ifm-color-emphasis-500)',
+              fontSize: '13px', textAlign: 'center',
+            }}>
+              ← 존을 클릭하면<br />DNSSEC 레코드 상세와<br />검증 원리가 표시됩니다
+            </div>
+          )}
+
+          <div style={{
+            marginTop: '14px', padding: '12px 14px', borderRadius: '8px',
+            background: '#e74c3c10', border: '1px solid #e74c3c40',
+            fontSize: '12px', color: 'var(--ifm-color-emphasis-700)', lineHeight: 1.6,
+          }}>
+            <b style={{ color: '#e74c3c' }}>주의:</b> DNSSEC은 응답 <b>무결성 검증</b>만 합니다.<br />
+            평문 전송은 그대로 — 기밀성은 DoH/DoT로 해결해야 합니다.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function RoundRobinSimulator() {
+  const [servers, setServers] = useState([
+    { id: 1, ip: '203.0.113.10', label: 'Server A', alive: true, hitCount: 0 },
+    { id: 2, ip: '203.0.113.20', label: 'Server B', alive: true, hitCount: 0 },
+    { id: 3, ip: '203.0.113.30', label: 'Server C', alive: true, hitCount: 0 },
+  ]);
+  const [rrIndex, setRrIndex] = useState(0);
+  const [log, setLog] = useState([]);
+  const [animId, setAnimId] = useState(null);
+
+  const query = () => {
+    const idx = rrIndex % 3;
+    const srv = servers[idx];
+    const failed = !srv.alive;
+
+    const entry = {
+      id: Date.now(),
+      ip: srv.ip,
+      label: srv.label,
+      failed,
+      msg: failed
+        ? `→ ${srv.ip} (${srv.label}) — 서버 다운! 사용자 접속 실패`
+        : `→ ${srv.ip} (${srv.label}) — 응답 성공`,
+    };
+
+    setLog(prev => [entry, ...prev].slice(0, 6));
+    setAnimId(srv.id);
+    setRrIndex(prev => prev + 1);
+    setServers(prev => prev.map(s =>
+      s.id === srv.id ? { ...s, hitCount: s.hitCount + 1 } : s
+    ));
+    setTimeout(() => setAnimId(null), 500);
+  };
+
+  const toggleServer = (id) => {
+    setServers(prev => prev.map(s => s.id === id ? { ...s, alive: !s.alive } : s));
+  };
+
+  const reset = () => {
+    setServers(prev => prev.map(s => ({ ...s, alive: true, hitCount: 0 })));
+    setRrIndex(0);
+    setLog([]);
+  };
+
+  return (
+    <div style={{ margin: '24px 0', fontFamily: 'monospace' }}>
+      <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
+        {/* 서버 목록 */}
+        <div style={{ flex: '1', minWidth: '200px' }}>
+          <div style={{ fontSize: '12px', color: 'var(--ifm-color-emphasis-500)', marginBottom: '8px' }}>
+            서버 클릭 = 다운/복구 토글
+          </div>
+          {servers.map((srv) => (
+            <div
+              key={srv.id}
+              onClick={() => toggleServer(srv.id)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: '10px',
+                padding: '10px 14px', marginBottom: '6px', borderRadius: '8px',
+                cursor: 'pointer', userSelect: 'none',
+                border: `2px solid ${srv.alive ? '#27ae60' : '#e74c3c'}`,
+                background: animId === srv.id
+                  ? (srv.alive ? '#27ae6030' : '#e74c3c30')
+                  : 'var(--ifm-card-background-color)',
+                transition: 'background 0.3s',
+                opacity: srv.alive ? 1 : 0.7,
+              }}
+            >
+              <div style={{
+                width: '10px', height: '10px', borderRadius: '50%',
+                background: srv.alive ? '#27ae60' : '#e74c3c',
+                flexShrink: 0,
+              }} />
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 700, fontSize: '13px' }}>{srv.label}</div>
+                <div style={{ fontSize: '11px', color: 'var(--ifm-color-emphasis-500)' }}>{srv.ip}</div>
+              </div>
+              <div style={{ fontSize: '11px', color: 'var(--ifm-color-emphasis-600)', textAlign: 'right' }}>
+                {srv.alive ? '정상' : '다운'}<br />
+                <span style={{ fontSize: '10px' }}>요청 {srv.hitCount}회</span>
+              </div>
+            </div>
+          ))}
+          <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
+            <button
+              onClick={query}
+              style={{
+                flex: 1, padding: '10px', borderRadius: '8px', border: 'none',
+                background: '#3498db', color: '#fff', fontWeight: 700,
+                cursor: 'pointer', fontSize: '13px', fontFamily: 'monospace',
+              }}
+            >
+              DNS 질의 →
+            </button>
+            <button
+              onClick={reset}
+              style={{
+                padding: '10px 14px', borderRadius: '8px',
+                border: '1px solid var(--ifm-color-emphasis-300)',
+                background: 'transparent', cursor: 'pointer', fontSize: '12px',
+                color: 'var(--ifm-color-emphasis-600)', fontFamily: 'monospace',
+              }}
+            >
+              리셋
+            </button>
+          </div>
+        </div>
+
+        {/* 로그 */}
+        <div style={{ flex: '1', minWidth: '220px' }}>
+          <div style={{ fontSize: '12px', color: 'var(--ifm-color-emphasis-500)', marginBottom: '8px' }}>
+            질의 로그 (최근 6건)
+          </div>
+          <div style={{
+            background: '#0d1117', borderRadius: '8px', padding: '12px',
+            minHeight: '160px', fontFamily: 'monospace',
+          }}>
+            {log.length === 0 ? (
+              <div style={{ color: '#555', fontSize: '12px' }}>DNS 질의 버튼을 눌러보세요</div>
+            ) : log.map((entry) => (
+              <div key={entry.id} style={{
+                fontSize: '12px', marginBottom: '5px',
+                color: entry.failed ? '#e74c3c' : '#27ae60',
+              }}>
+                {entry.msg}
+              </div>
+            ))}
+          </div>
+          <div style={{
+            marginTop: '10px', padding: '10px 12px', borderRadius: '8px',
+            background: '#e67e2215', border: '1px solid #e67e2240',
+            fontSize: '12px', lineHeight: 1.6, color: 'var(--ifm-color-emphasis-700)',
+          }}>
+            <b style={{ color: '#e67e22' }}>Round Robin 치명적 한계:</b><br />
+            헬스 체크가 없어 서버가 다운돼도 계속 해당 IP를 응답합니다.<br />
+            실무 해결책: AWS Route 53 / Cloudflare 같은 관리형 DNS 사용
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function CDNRoutingViz() {
+  const [mode, setMode] = useState('geo');
+  const [selectedRegion, setSelectedRegion] = useState(null);
+
+  const regions = [
+    { id: 'kr', label: '한국 (Seoul)', flag: '🇰🇷', geoEdge: 'Seoul Edge', anycastEdge: 'Seoul Edge', latency: '5ms' },
+    { id: 'us', label: '미국 (NYC)', flag: '🇺🇸', geoEdge: 'NYC Edge', anycastEdge: 'NYC Edge', latency: '8ms' },
+    { id: 'de', label: '독일 (Frankfurt)', flag: '🇩🇪', geoEdge: 'Frankfurt Edge', anycastEdge: 'Frankfurt Edge', latency: '6ms' },
+    { id: 'br', label: '브라질 (São Paulo)', flag: '🇧🇷', geoEdge: 'São Paulo Edge', anycastEdge: 'São Paulo Edge', latency: '11ms' },
+  ];
+
+  const geoDesc = 'DNS 서버가 클라이언트 IP의 지리적 위치를 판단해 가장 가까운 엣지 서버의 IP를 응답합니다. IP 기반이라 VPN 우회 등으로 빗나갈 수 있습니다.';
+  const anycastDesc = '전 세계 엣지 서버가 동일한 IP를 공유합니다. 클라이언트 패킷은 BGP 라우팅에 의해 네트워크 토폴로지상 가장 가까운 노드에 자동으로 도달합니다. IP 주소는 항상 동일합니다.';
+
+  const sel = selectedRegion ? regions.find(r => r.id === selectedRegion) : null;
+
+  return (
+    <div style={{ margin: '24px 0', fontFamily: 'monospace' }}>
+      {/* 탭 */}
+      <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
+        {[
+          { key: 'geo', label: 'GeoDNS', color: '#3498db' },
+          { key: 'anycast', label: 'Anycast', color: '#9b59b6' },
+        ].map(tab => (
+          <button
+            key={tab.key}
+            onClick={() => { setMode(tab.key); setSelectedRegion(null); }}
+            style={{
+              padding: '8px 20px', borderRadius: '8px', border: 'none',
+              background: mode === tab.key ? tab.color : 'var(--ifm-color-emphasis-200)',
+              color: mode === tab.key ? '#fff' : 'var(--ifm-color-emphasis-700)',
+              fontWeight: 700, cursor: 'pointer', fontSize: '13px',
+              fontFamily: 'monospace', transition: 'all 0.15s',
+            }}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
+        {/* 지역 목록 */}
+        <div style={{ flex: '1', minWidth: '200px' }}>
+          <div style={{ fontSize: '12px', color: 'var(--ifm-color-emphasis-500)', marginBottom: '8px' }}>
+            클라이언트 위치 선택
+          </div>
+          {regions.map(r => {
+            const isSel = selectedRegion === r.id;
+            const color = mode === 'geo' ? '#3498db' : '#9b59b6';
+            return (
+              <div
+                key={r.id}
+                onClick={() => setSelectedRegion(isSel ? null : r.id)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: '10px',
+                  padding: '10px 14px', marginBottom: '6px', borderRadius: '8px',
+                  cursor: 'pointer', userSelect: 'none',
+                  border: `2px solid ${isSel ? color : 'var(--ifm-color-emphasis-200)'}`,
+                  background: isSel ? color + '15' : 'var(--ifm-card-background-color)',
+                  transition: 'all 0.15s',
+                }}
+              >
+                <span style={{ fontSize: '20px' }}>{r.flag}</span>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 700, fontSize: '13px' }}>{r.label}</div>
+                  <div style={{ fontSize: '11px', color: 'var(--ifm-color-emphasis-500)' }}>
+                    → {mode === 'geo' ? r.geoEdge : r.anycastEdge}
+                  </div>
+                </div>
+                <div style={{ fontSize: '11px', fontWeight: 700, color }}>
+                  {r.latency}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* 설명 패널 */}
+        <div style={{ flex: '1', minWidth: '220px' }}>
+          {sel ? (
+            <div style={{
+              padding: '18px', borderRadius: '12px',
+              background: (mode === 'geo' ? '#3498db' : '#9b59b6') + '10',
+              border: `2px solid ${mode === 'geo' ? '#3498db' : '#9b59b6'}`,
+            }}>
+              <div style={{ fontSize: '20px', marginBottom: '4px' }}>{sel.flag} {sel.label}</div>
+              <div style={{ fontSize: '13px', color: 'var(--ifm-color-emphasis-700)', lineHeight: 1.7, marginTop: '10px' }}>
+                {mode === 'geo' ? (
+                  <>
+                    <b>클라이언트 IP</b> → 지리 DB 조회<br />
+                    → <b>DNS 응답</b>: <code>{sel.geoEdge}</code>의 IP<br />
+                    → 해당 엣지 서버로 직접 접속
+                  </>
+                ) : (
+                  <>
+                    <b>목적지 IP</b>: 전 세계 동일 (e.g. <code>104.16.0.1</code>)<br />
+                    → BGP 라우팅이 <b>{sel.anycastEdge}</b>로 유도<br />
+                    → 네트워크 최적 경로로 자동 도달
+                  </>
+                )}
+              </div>
+              <div style={{ marginTop: '12px', fontSize: '12px', color: 'var(--ifm-color-emphasis-600)' }}>
+                예상 레이턴시: <b style={{ color: mode === 'geo' ? '#3498db' : '#9b59b6' }}>{sel.latency}</b>
+              </div>
+            </div>
+          ) : (
+            <div style={{
+              padding: '18px', borderRadius: '12px',
+              background: 'var(--ifm-color-emphasis-100)',
+              border: '2px dashed var(--ifm-color-emphasis-300)',
+              minHeight: '160px', display: 'flex', alignItems: 'center',
+              justifyContent: 'center', textAlign: 'center',
+              color: 'var(--ifm-color-emphasis-500)', fontSize: '13px',
+            }}>
+              ← 위치를 선택하면<br />라우팅 경로를 확인합니다
+            </div>
+          )}
+
+          <div style={{
+            marginTop: '12px', padding: '12px', borderRadius: '8px',
+            background: 'var(--ifm-color-emphasis-100)',
+            fontSize: '12px', lineHeight: 1.7, color: 'var(--ifm-color-emphasis-700)',
+          }}>
+            <b>{mode === 'geo' ? 'GeoDNS' : 'Anycast'}:</b> {mode === 'geo' ? geoDesc : anycastDesc}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function DNSPrivacyComparison() {
+  const [selected, setSelected] = useState(null);
+
+  const protocols = [
+    {
+      id: 'plain',
+      label: '기존 DNS',
+      port: '53/UDP',
+      protocol: '평문',
+      encrypted: false,
+      identifiable: '매우 쉬움',
+      level: '앱/OS',
+      color: '#e74c3c',
+      detail: '모든 DNS 질의가 평문으로 전송됩니다. ISP, 공공 Wi-Fi 운영자, 중간 라우터 모두 어떤 도메인을 조회하는지 볼 수 있습니다. 캐시 포이즈닝 공격에도 취약합니다.',
+      icon: '🔓',
+    },
+    {
+      id: 'dot',
+      label: 'DoT',
+      en: 'DNS over TLS',
+      port: '853/TCP',
+      protocol: 'TLS',
+      encrypted: true,
+      identifiable: '쉬움 (전용 포트)',
+      level: 'OS/리졸버',
+      color: '#f39c12',
+      detail: '853번 전용 포트를 사용하기 때문에 트래픽이 DoT임을 쉽게 식별할 수 있습니다. 검열이나 방화벽 차단이 용이하다는 단점이 있습니다. 서버-리졸버 구간에서 많이 사용됩니다.',
+      icon: '🔒',
+    },
+    {
+      id: 'doh',
+      label: 'DoH',
+      en: 'DNS over HTTPS',
+      port: '443/TCP',
+      protocol: 'HTTPS',
+      encrypted: true,
+      identifiable: '어려움 (웹 트래픽과 혼합)',
+      level: '브라우저/앱',
+      color: '#27ae60',
+      detail: '일반 HTTPS와 같은 443 포트를 사용하기 때문에 DNS 질의인지 웹 요청인지 외부에서 구분할 수 없습니다. Firefox, Chrome이 직접 지원하며, 검열 우회에 유리합니다. DNS 권한이 OS 리졸버에서 앱으로 이동한다는 논란도 있습니다.',
+      icon: '🔐',
+    },
+  ];
+
+  const sel = selected ? protocols.find(p => p.id === selected) : null;
+
+  return (
+    <div style={{ margin: '24px 0', fontFamily: 'monospace' }}>
+      <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '14px' }}>
+        {protocols.map(p => (
+          <div
+            key={p.id}
+            onClick={() => setSelected(selected === p.id ? null : p.id)}
+            style={{
+              flex: '1', minWidth: '140px', padding: '14px',
+              borderRadius: '10px', cursor: 'pointer', userSelect: 'none',
+              border: `2px solid ${p.color}`,
+              background: selected === p.id ? p.color + '18' : 'var(--ifm-card-background-color)',
+              outline: selected === p.id ? `3px solid ${p.color}` : 'none',
+              transition: 'all 0.15s',
+            }}
+          >
+            <div style={{ fontSize: '22px', marginBottom: '4px' }}>{p.icon}</div>
+            <div style={{ fontWeight: 900, fontSize: '15px', color: p.color }}>{p.label}</div>
+            {p.en && <div style={{ fontSize: '10px', color: 'var(--ifm-color-emphasis-500)', marginTop: '2px' }}>{p.en}</div>}
+            <div style={{ marginTop: '8px', fontSize: '11px', color: 'var(--ifm-color-emphasis-600)', lineHeight: 1.6 }}>
+              <div>포트: <b>{p.port}</b></div>
+              <div>암호화: <b style={{ color: p.encrypted ? '#27ae60' : '#e74c3c' }}>{p.encrypted ? '✔' : '✘'}</b></div>
+              <div>식별: <b>{p.identifiable}</b></div>
+              <div>적용: <b>{p.level}</b></div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {sel && (
+        <div style={{
+          padding: '18px', borderRadius: '12px',
+          background: sel.color + '10', border: `2px solid ${sel.color}`,
+          fontSize: '13px', lineHeight: 1.7, color: 'var(--ifm-color-emphasis-800)',
+        }}>
+          <b style={{ color: sel.color }}>{sel.label} {sel.en ? `(${sel.en})` : ''}</b><br />
+          {sel.detail}
+        </div>
+      )}
+
+      <div style={{
+        marginTop: '14px', padding: '12px 14px', borderRadius: '8px',
+        background: '#27ae6015', border: '1px solid #27ae6040',
+        fontSize: '12px', lineHeight: 1.7, color: 'var(--ifm-color-emphasis-700)',
+      }}>
+        <b style={{ color: '#27ae60' }}>DNSSEC vs DoH/DoT:</b><br />
+        DNSSEC = 응답 <b>무결성 검증</b> (위변조 방지)<br />
+        DoH/DoT = 질의 <b>기밀성 보장</b> (도청 방지)<br />
+        둘은 상호 보완적이므로 함께 사용하는 것이 이상적입니다.
+      </div>
+    </div>
+  );
+}
+
+## 1. DNSSEC — 신뢰 체인으로 응답을 검증하다
+
+DNS 응답은 기본적으로 검증 방법이 없습니다. 공격자가 `example.com → 192.168.1.1` 이라는 가짜 응답을 캐시에 심으면 (**캐시 포이즈닝**), 클라이언트는 이를 구분할 방법이 없습니다.
+
+**DNSSEC**은 공개키 암호화 기반 디지털 서명으로 이 문제를 해결합니다:
+
+- **RRSIG** — DNS 레코드셋에 대한 디지털 서명
+- **DNSKEY** — 서명 검증에 사용하는 공개키 (KSK: 키 서명 키, ZSK: 존 서명 키)
+- **DS** — 자식 존의 DNSKEY를 해시한 위임 서명자 레코드 (부모 존에 등록)
+
+루트 존부터 최종 도메인까지 체인이 이어져야 전체 검증이 성립합니다. 리졸버에 사전 내장된 루트 존 공개키(**Trust Anchor**)가 신뢰의 시작점입니다.
+
+<DNSSECChainViz />
+
+:::info KSK와 ZSK를 분리하는 이유
+KSK(2048비트)는 거의 바뀌지 않는 최상위 키, ZSK(1024비트)는 주기적으로 롤오버합니다. 비용이 큰 키 교체를 분리해 관리 부담을 줄이기 위한 설계입니다.
+:::
+
+---
+
+## 2. DNS Round Robin — 헬스 체크 없는 부하 분산
+
+하나의 도메인에 여러 A 레코드를 등록하면, DNS 서버는 질의마다 순서를 돌아가며 다른 IP를 응답합니다. 추가 인프라 없이 **비용 0원**으로 부하를 분산할 수 있습니다.
+
+```
+example.com  A  203.0.113.10   ; Server A
+example.com  A  203.0.113.20   ; Server B
+example.com  A  203.0.113.30   ; Server C
+```
+
+단, 치명적인 한계가 있습니다. **서버를 클릭해 다운시키고 DNS 질의를 계속 보내보세요:**
+
+<RoundRobinSimulator />
+
+서버가 다운돼도 DNS는 해당 IP를 계속 응답합니다. 브라우저의 **Happy Eyeballs** 알고리즘이 부분적으로 완화해주지만, 근본 해결책은 아닙니다.
+
+| 항목 | Round Robin | 관리형 DNS (Route 53 등) |
+|------|-------------|--------------------------|
+| 비용 | 0원 | 유료 |
+| 헬스 체크 | 없음 | 있음 |
+| 세션 유지 | 불가 | 설정 가능 |
+| 가중치 분산 | 불가 | 가능 |
+
+실무에서는 단독 사용보다 **AWS Route 53, Cloudflare DNS** 같은 관리형 서비스로 헬스 체크와 가중치 라우팅을 결합해 사용합니다.
+
+---
+
+## 3. CDN과 DNS — 가장 가까운 엣지로 안내하기
+
+CDN은 전 세계 엣지 서버에 콘텐츠를 캐시해두고, DNS를 통해 클라이언트를 **가장 가까운 서버**로 유도합니다. 적용 자체는 간단합니다:
+
+```
+www.example.com  CNAME  www.example.com.cdn-provider.net
+```
+
+CNAME만 바꾸면 이후 지역 기반 라우팅은 CDN 제공자가 처리합니다. 라우팅 방식은 크게 두 가지입니다:
+
+<CDNRoutingViz />
+
+- **GeoDNS**: 클라이언트 IP → 지리 DB 조회 → 가까운 엣지 IP 응답. IP 기반이라 VPN으로 우회 가능
+- **Anycast**: 동일 IP를 여러 엣지가 공유, BGP가 네트워크 토폴로지상 최적 노드로 자동 유도. Cloudflare, AWS CloudFront가 채택
+
+:::tip CDN 전환 후 캐시 지연
+TTL이 남아있는 동안 구 IP를 가리킬 수 있습니다. 급하게 전환해야 할 때는 전환 전 TTL을 낮춰두세요 (e.g. 300초 → 60초).
+:::
+
+---
+
+## 4. DoH / DoT — 질의 자체를 암호화하다
+
+기존 DNS는 UDP 53번 포트로 **평문** 전송됩니다. ISP, 공공 Wi-Fi, 중간 라우터가 어떤 도메인을 조회하는지 모두 볼 수 있습니다. DNSSEC이 응답 **위변조**를 막는다면, DoH/DoT는 질의 **도청**을 막습니다.
+
+<DNSPrivacyComparison />
+
+실무 적용 기준:
+- **서버-리졸버 구간**: DoT (전용 포트 853, 인프라 수준 설정)
+- **엔드유저 프라이버시**: DoH (443, 브라우저 직접 지원 — Firefox/Chrome)
+- **검열 우회 환경**: DoH (HTTPS 트래픽과 구분 불가)
+
+---
+
+## 정리 — 네 가지를 한 문장으로
+
+| 기술 | 해결하는 문제 | 핵심 메커니즘 |
+|------|-------------|--------------|
+| DNSSEC | 응답 위변조 | 공개키 서명 + 신뢰 체인 |
+| Round Robin | 단순 부하 분산 | 다중 A 레코드 순환 응답 |
+| GeoDNS / Anycast | 지연 최소화 | IP 기반 지역 라우팅 / BGP 경로 선택 |
+| DoH / DoT | 질의 도청 방지 | TLS/HTTPS 암호화 |
+
+DNSSEC과 DoH/DoT는 서로 **보완 관계**입니다. DNSSEC은 "응답이 진짜인가", DoH/DoT는 "질의가 누군가에게 보이지 않는가"를 각각 해결합니다. 보안을 진지하게 고려한다면 두 가지를 함께 적용하는 것이 정석입니다.
