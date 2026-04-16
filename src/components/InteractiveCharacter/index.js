@@ -3,6 +3,21 @@ import { Canvas, useFrame } from '@react-three/fiber';
 import { Float, RoundedBox } from '@react-three/drei';
 import * as THREE from 'three';
 
+// WebGL 실패 시 graceful fallback — 프로덕션 빌드에서 silent crash 방지
+class CanvasErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false };
+  }
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+  render() {
+    if (this.state.hasError) return null;
+    return this.props.children;
+  }
+}
+
 // 마우스 좌표 정규화(-1 ~ 1)
 function useMousePosition() {
   const mouse = useRef({ x: 0, y: 0 });
@@ -415,13 +430,16 @@ export default function InteractiveCharacter() {
       transition: 'opacity 0.1s ease-out',
       pointerEvents: opacity < 0.1 ? 'none' : 'auto',
     }}>
-      <Canvas
-        camera={{ position: [0, 0, 3.5], fov: 45 }}
-        style={{ background: 'transparent' }}
-        gl={{ alpha: true, antialias: true }}
-      >
-        <Scene />
-      </Canvas>
+      <CanvasErrorBoundary>
+        <Canvas
+          camera={{ position: [0, 0, 3.5], fov: 45 }}
+          // 높이를 명시해 프로덕션 CSS 로딩 순서 차이로 height:0 이 되는 현상 방지
+          style={{ background: 'transparent', width: '100%', height: '100%' }}
+          gl={{ alpha: true, antialias: true, powerPreference: 'high-performance' }}
+        >
+          <Scene />
+        </Canvas>
+      </CanvasErrorBoundary>
     </div>
   );
 }

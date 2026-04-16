@@ -1,0 +1,774 @@
+---
+title: "파일 업로드·다운로드 구현 — multipart, DataTransfer, Git 설정"
+date: 2026-04-16
+authors: HyungJun
+tags: [Java, Web]
+---
+
+import { useState, useEffect, useRef } from 'react';
+
+{/* ────────────────────────────────────────────────────────────
+    Component 1: 파일 업로드 / 다운로드 흐름 시각화
+──────────────────────────────────────────────────────────── */}
+export function FileFlowViz() {
+  const SCENARIOS = [
+    {
+      label: '파일 업로드',
+      color: '#3b82f6',
+      steps: [
+        { icon: '📎', label: 'multipart/form-data 폼 전송', sub: 'POST /upload   Content-Type: multipart/form-data; boundary=----WebKit...', color: '#3b82f6' },
+        { icon: '⚙️', label: '@MultipartConfig 진입', sub: 'fileSizeThreshold / maxFileSize / maxRequestSize — 초과 시 IllegalStateException', color: '#8b5cf6' },
+        { icon: '🔍', label: 'request.getParts() 순회', sub: 'Part.getSubmittedFileName() != null → 파일 파트 / null → 텍스트 파라미터', color: '#f59e0b' },
+        { icon: '📁', label: '저장 경로 확인 & 생성', sub: 'getRealPath("/uploads") → File.exists() → mkdirs()', color: '#06b6d4' },
+        { icon: '💾', label: 'part.write(path + fileName)', sub: '서버 디스크에 파일 기록 (Commons IO 불필요 — Servlet 3.0+ 내장)', color: '#10b981' },
+        { icon: '📋', label: 'forward → index.jsp', sub: 'request.setAttribute("fileList", list) → c:forEach로 목록 렌더링', color: '#10b981' },
+      ],
+    },
+    {
+      label: '파일 다운로드',
+      color: '#10b981',
+      steps: [
+        { icon: '🖥️', label: '다운로드 요청', sub: 'GET /download.do?fileName=report.pdf', color: '#3b82f6' },
+        { icon: '🔍', label: '파일 조회 & 검증', sub: 'new File(uploadPath, fileName) → exists() 확인 → 없으면 404 처리', color: '#8b5cf6' },
+        { icon: '📤', label: 'Content-Type 헤더', sub: 'response.setContentType("application/octet-stream") — 바이너리 전송', color: '#f59e0b' },
+        { icon: '📎', label: 'Content-Disposition 헤더', sub: 'attachment; filename="' + '한글파일명은 URLEncoder.encode(name, UTF-8)으로 인코딩"', color: '#f59e0b' },
+        { icon: '🌊', label: 'InputStream → OutputStream 버퍼 전송', sub: 'byte[4096] buf; while((len=in.read(buf)) != -1) out.write(buf, 0, len)', color: '#06b6d4' },
+        { icon: '✅', label: '전송 완료 & 스트림 해제', sub: 'try-with-resources — 예외 발생 시에도 스트림 자동 close 보장', color: '#10b981' },
+      ],
+    },
+  ];
+
+  const [scenario, setScenario] = useState(0);
+  const [active, setActive] = useState(-1);
+  const [running, setRunning] = useState(false);
+  const timerRef = useRef(null);
+  const sc = SCENARIOS[scenario];
+
+  const run = () => {
+    setActive(-1);
+    setRunning(true);
+    let i = 0;
+    const next = () => {
+      setActive(i);
+      i++;
+      if (i < sc.steps.length) timerRef.current = setTimeout(next, 680);
+      else setRunning(false);
+    };
+    timerRef.current = setTimeout(next, 200);
+  };
+
+  const reset = () => { clearTimeout(timerRef.current); setActive(-1); setRunning(false); };
+  const changeScenario = (idx) => { reset(); setScenario(idx); };
+
+  useEffect(() => () => clearTimeout(timerRef.current), []);
+
+  const wrap = { margin: '32px 0', borderRadius: '18px', overflow: 'hidden', border: '1px solid var(--ifm-color-emphasis-300)', background: 'var(--ifm-background-surface-color)' };
+
+  return (
+    <div style={wrap}>
+      <div style={{ padding: '18px 24px', borderBottom: '1px solid var(--ifm-color-emphasis-200)' }}>
+        <div style={{ fontWeight: '700', fontSize: '15px', marginBottom: '12px' }}>📂 파일 처리 흐름 시뮬레이터</div>
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          {SCENARIOS.map((s, i) => (
+            <button key={i} onClick={() => changeScenario(i)} style={{ padding: '6px 16px', borderRadius: '8px', border: `2px solid ${scenario === i ? s.color : 'var(--ifm-color-emphasis-300)'}`, background: scenario === i ? `${s.color}15` : 'transparent', color: scenario === i ? s.color : 'var(--ifm-color-content-secondary)', fontWeight: '700', fontSize: '12px', cursor: 'pointer', transition: 'all 0.2s' }}>
+              {s.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        {sc.steps.map((step, i) => {
+          const isPast = i < active;
+          const isCurrent = i === active;
+          const opacity = active === -1 ? 0.5 : (isPast || isCurrent ? 1 : 0.25);
+          const bg = isCurrent ? `${step.color}18` : isPast ? 'rgba(16,185,129,0.07)' : 'var(--ifm-color-emphasis-100)';
+          const border = isCurrent ? `2px solid ${step.color}` : isPast ? '2px solid rgba(16,185,129,0.3)' : '2px solid var(--ifm-color-emphasis-200)';
+          return (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '11px 14px', borderRadius: '10px', background: bg, border, opacity, transition: 'all 0.3s ease' }}>
+              <span style={{ fontSize: '18px', minWidth: '26px', textAlign: 'center' }}>{isPast ? '✅' : step.icon}</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: '700', fontSize: '13px', color: isCurrent ? step.color : isPast ? '#10b981' : 'var(--ifm-color-content)' }}>{step.label}</div>
+                <div style={{ fontSize: '11px', fontFamily: 'monospace', color: 'var(--ifm-color-emphasis-500)', marginTop: '2px' }}>{step.sub}</div>
+              </div>
+              {isCurrent && <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: step.color, flexShrink: 0, boxShadow: `0 0 8px ${step.color}` }} />}
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{ padding: '14px 24px', borderTop: '1px solid var(--ifm-color-emphasis-200)', display: 'flex', gap: '8px', alignItems: 'center' }}>
+        <button onClick={run} disabled={running} style={{ padding: '8px 18px', borderRadius: '8px', border: 'none', background: running ? 'var(--ifm-color-emphasis-300)' : sc.color, color: running ? 'var(--ifm-color-content-secondary)' : '#fff', fontWeight: '700', fontSize: '13px', cursor: running ? 'not-allowed' : 'pointer', transition: 'all 0.2s' }}>
+          {running ? '진행 중...' : '▶ 실행'}
+        </button>
+        <button onClick={reset} style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid var(--ifm-color-emphasis-300)', background: 'transparent', color: 'var(--ifm-color-content-secondary)', fontSize: '13px', cursor: 'pointer' }}>↺ 초기화</button>
+        {active === -1 && <span style={{ fontSize: '12px', color: 'var(--ifm-color-emphasis-400)' }}>시나리오를 선택하고 ▶ 실행을 눌러보세요</span>}
+      </div>
+    </div>
+  );
+}
+
+{/* ────────────────────────────────────────────────────────────
+    Component 2: 데이터 단위 변환기
+──────────────────────────────────────────────────────────── */}
+export function DataUnitConverter() {
+  const UNITS = [
+    { name: 'Bit',      abbr: 'b',   factor: 0.125,           example: '0 또는 1 — 이진수 1자리' },
+    { name: 'Byte',     abbr: 'B',   factor: 1,               example: '영문자 1글자' },
+    { name: 'Kilobyte', abbr: 'KB',  factor: 1024,            example: '텍스트 이메일 1통' },
+    { name: 'Megabyte', abbr: 'MB',  factor: 1024 ** 2,       example: '고화질 사진 1장' },
+    { name: 'Gigabyte', abbr: 'GB',  factor: 1024 ** 3,       example: '영화 1편 (HD)' },
+    { name: 'Terabyte', abbr: 'TB',  factor: 1024 ** 4,       example: '외장 하드디스크 1개' },
+    { name: 'Petabyte', abbr: 'PB',  factor: 1024 ** 5,       example: '대형 데이터센터 스토리지' },
+  ];
+
+  const [inputVal, setInputVal] = useState('100');
+  const [selectedUnit, setSelectedUnit] = useState('MB');
+  const [highlight, setHighlight] = useState(null);
+
+  const numVal = parseFloat(inputVal) || 0;
+  const baseBytes = numVal * (UNITS.find(u => u.abbr === selectedUnit)?.factor ?? 1);
+
+  const fmt = (bytes, factor) => {
+    const v = bytes / factor;
+    if (v === 0) return '0';
+    if (v >= 1e15) return v.toExponential(2);
+    if (v >= 1000) return v.toLocaleString('ko-KR', { maximumFractionDigits: 2 });
+    if (v >= 1) return v.toLocaleString('ko-KR', { maximumFractionDigits: 4 });
+    return v.toExponential(3);
+  };
+
+  const wrap = { margin: '32px 0', borderRadius: '18px', overflow: 'hidden', border: '1px solid var(--ifm-color-emphasis-300)', background: 'var(--ifm-background-surface-color)' };
+
+  return (
+    <div style={wrap}>
+      <div style={{ padding: '18px 24px', borderBottom: '1px solid var(--ifm-color-emphasis-200)', fontWeight: '700', fontSize: '15px' }}>📊 데이터 단위 변환기</div>
+
+      {/* 입력 */}
+      <div style={{ padding: '20px 24px 0' }}>
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center', marginBottom: '20px' }}>
+          <input
+            type="number"
+            value={inputVal}
+            onChange={e => setInputVal(e.target.value)}
+            style={{ padding: '9px 12px', borderRadius: '8px', border: '1px solid var(--ifm-color-emphasis-300)', background: 'var(--ifm-background-color)', color: 'var(--ifm-color-content)', fontSize: '15px', fontWeight: '700', width: '130px', fontFamily: 'monospace' }}
+          />
+          <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+            {UNITS.map(u => (
+              <button key={u.abbr} onClick={() => setSelectedUnit(u.abbr)} style={{ padding: '7px 12px', borderRadius: '8px', border: `2px solid ${selectedUnit === u.abbr ? '#3b82f6' : 'var(--ifm-color-emphasis-300)'}`, background: selectedUnit === u.abbr ? '#3b82f620' : 'transparent', color: selectedUnit === u.abbr ? '#3b82f6' : 'var(--ifm-color-content-secondary)', fontWeight: '700', fontSize: '12px', cursor: 'pointer', transition: 'all 0.15s', fontFamily: 'monospace' }}>
+                {u.abbr}
+              </button>
+            ))}
+          </div>
+          <span style={{ fontSize: '13px', color: 'var(--ifm-color-emphasis-500)' }}>→ 아래 단위로 자동 변환</span>
+        </div>
+      </div>
+
+      {/* 단위 표 */}
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+          <thead>
+            <tr style={{ background: 'var(--ifm-color-emphasis-100)' }}>
+              {['단위', '기호', '1단계 관계', '변환값', '대표 예시'].map((h, i) => (
+                <th key={i} style={{ padding: '10px 16px', textAlign: i >= 3 ? 'right' : 'left', fontWeight: '700', color: 'var(--ifm-color-emphasis-600)', fontSize: '11px', whiteSpace: 'nowrap' }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {UNITS.map((u, i) => {
+              const isSelected = u.abbr === selectedUnit;
+              const converted = fmt(baseBytes, u.factor);
+              return (
+                <tr
+                  key={u.abbr}
+                  onMouseEnter={() => setHighlight(u.abbr)}
+                  onMouseLeave={() => setHighlight(null)}
+                  style={{ borderTop: '1px solid var(--ifm-color-emphasis-200)', background: isSelected ? '#3b82f615' : highlight === u.abbr ? 'var(--ifm-color-emphasis-50,rgba(0,0,0,0.02))' : 'transparent', transition: 'background 0.15s' }}
+                >
+                  <td style={{ padding: '11px 16px', fontWeight: isSelected ? '700' : '400', color: isSelected ? '#3b82f6' : 'var(--ifm-color-content)' }}>
+                    {isSelected && <span style={{ marginRight: '6px', fontSize: '10px', background: '#3b82f6', color: '#fff', padding: '1px 6px', borderRadius: '4px' }}>기준</span>}
+                    {u.name}
+                  </td>
+                  <td style={{ padding: '11px 16px', fontFamily: 'monospace', fontWeight: '700', color: isSelected ? '#3b82f6' : 'var(--ifm-color-emphasis-600)' }}>{u.abbr}</td>
+                  <td style={{ padding: '11px 16px', fontFamily: 'monospace', fontSize: '12px', color: 'var(--ifm-color-emphasis-500)' }}>
+                    {i === 0 ? '1/8 Byte' : i === 1 ? '8 bit' : `1,024 ${UNITS[i-1].abbr}`}
+                  </td>
+                  <td style={{ padding: '11px 16px', textAlign: 'right', fontFamily: 'monospace', fontWeight: isSelected ? '800' : '500', fontSize: isSelected ? '14px' : '13px', color: isSelected ? '#3b82f6' : 'var(--ifm-color-content)' }}>
+                    {converted} <span style={{ fontSize: '11px', color: 'var(--ifm-color-emphasis-500)', fontWeight: '400' }}>{u.abbr}</span>
+                  </td>
+                  <td style={{ padding: '11px 16px', textAlign: 'right', fontSize: '12px', color: 'var(--ifm-color-emphasis-500)' }}>{u.example}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {/* 파일 업로드 관련 사이즈 참고 */}
+      <div style={{ padding: '14px 24px', borderTop: '1px solid var(--ifm-color-emphasis-200)', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+        {[
+          { label: '1 MB', unit: 'MB', val: '1', desc: '@MultipartConfig 임계치 예시' },
+          { label: '50 MB', unit: 'MB', val: '50', desc: '단일 파일 maxFileSize 예시' },
+          { label: '200 MB', unit: 'MB', val: '200', desc: '요청 전체 maxRequestSize 예시' },
+        ].map(p => (
+          <button key={p.label} onClick={() => { setInputVal(p.val); setSelectedUnit(p.unit); }} title={p.desc} style={{ padding: '5px 12px', borderRadius: '8px', border: '1px solid var(--ifm-color-emphasis-300)', background: 'transparent', color: 'var(--ifm-color-content-secondary)', fontSize: '12px', cursor: 'pointer', transition: 'all 0.15s' }}>
+            {p.label} <span style={{ opacity: 0.6, fontSize: '10px' }}>({p.desc})</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+{/* ────────────────────────────────────────────────────────────
+    Component 3: DataTransfer 파일 선택 시뮬레이터
+──────────────────────────────────────────────────────────── */}
+export function DataTransferDemo() {
+  const MOCK_FILES = [
+    { name: '보고서_2026Q1.pdf',      size: 512 * 1024,            type: 'application/pdf' },
+    { name: '프로필사진.jpg',           size: 2.3 * 1024 * 1024,    type: 'image/jpeg' },
+    { name: '데이터분석.xlsx',          size: 256 * 1024,            type: 'application/vnd.ms-excel' },
+    { name: '발표자료.pptx',            size: 5 * 1024 * 1024,      type: 'application/vnd.ms-powerpoint' },
+    { name: '로고.png',                size: 84 * 1024,             type: 'image/png' },
+    { name: 'README.md',              size: 3 * 1024,              type: 'text/markdown' },
+  ];
+
+  const [files, setFiles] = useState([]);
+  const [mockIdx, setMockIdx] = useState(0);
+  const [log, setLog] = useState([]);
+  const logId = useRef(0);
+
+  const addLog = (msg, color) => {
+    const id = ++logId.current;
+    setLog(prev => [...prev.slice(-4), { id, msg, color }]);
+  };
+
+  const addFile = () => {
+    if (mockIdx >= MOCK_FILES.length) return;
+    const f = { ...MOCK_FILES[mockIdx], id: Date.now() };
+    setFiles(prev => [...prev, f]);
+    setMockIdx(prev => prev + 1);
+    addLog(`dataTransfer.items.add("${f.name}") → input.files 교체`, '#3b82f6');
+  };
+
+  const removeFile = (id, name) => {
+    setFiles(prev => prev.filter(f => f.id !== id));
+    addLog(`dataTransfer.items.remove(index) → "${name}" 제거 → 재렌더링`, '#ef4444');
+  };
+
+  const reset = () => { setFiles([]); setMockIdx(0); setLog([]); };
+
+  const fmtSize = (bytes) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+  };
+
+  const fileIcon = (type) => {
+    if (type.startsWith('image/')) return '🖼️';
+    if (type.includes('pdf')) return '📕';
+    if (type.includes('excel') || type.includes('spreadsheet')) return '📗';
+    if (type.includes('powerpoint') || type.includes('presentation')) return '📙';
+    return '📄';
+  };
+
+  const wrap = { margin: '32px 0', borderRadius: '18px', overflow: 'hidden', border: '1px solid var(--ifm-color-emphasis-300)', background: 'var(--ifm-background-surface-color)' };
+
+  return (
+    <div style={wrap}>
+      <div style={{ padding: '16px 24px', borderBottom: '1px solid var(--ifm-color-emphasis-200)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+        <div style={{ fontWeight: '700', fontSize: '15px' }}>📁 DataTransfer 파일 선택 시뮬레이터</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span style={{ padding: '4px 12px', borderRadius: '12px', background: files.length > 0 ? '#3b82f620' : 'var(--ifm-color-emphasis-100)', color: files.length > 0 ? '#3b82f6' : 'var(--ifm-color-emphasis-500)', fontWeight: '700', fontSize: '12px', border: `1px solid ${files.length > 0 ? '#3b82f640' : 'var(--ifm-color-emphasis-200)'}` }}>
+            {files.length}개 선택됨
+          </span>
+        </div>
+      </div>
+
+      <div style={{ padding: '20px 24px' }}>
+        {/* 설명 패널 */}
+        <div style={{ padding: '12px 16px', borderRadius: '10px', background: 'var(--ifm-color-emphasis-100)', border: '1px solid var(--ifm-color-emphasis-200)', marginBottom: '16px', fontSize: '12px', fontFamily: 'monospace', lineHeight: '1.8', color: 'var(--ifm-color-content-secondary)' }}>
+          <span style={{ color: '#8b5cf6', fontWeight: '700' }}>const</span> <span style={{ color: '#3b82f6' }}>dt</span> = <span style={{ color: '#8b5cf6', fontWeight: '700' }}>new</span> DataTransfer();<br/>
+          <span style={{ color: '#6b7280' }}>// 파일 추가 시: dt.items.add(file) → input.files = dt.files</span><br/>
+          <span style={{ color: '#6b7280' }}>// 파일 제거 시: dt.items.remove(i) → input.files = dt.files → 재렌더링</span>
+        </div>
+
+        {/* 파일 목록 */}
+        {files.length === 0 ? (
+          <div style={{ padding: '32px', textAlign: 'center', borderRadius: '10px', border: '2px dashed var(--ifm-color-emphasis-300)', color: 'var(--ifm-color-emphasis-400)', fontSize: '13px', marginBottom: '16px' }}>
+            아래 "파일 추가" 버튼을 눌러 파일을 선택해보세요
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '16px' }}>
+            {files.map((f, i) => (
+              <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 14px', borderRadius: '10px', border: '1px solid var(--ifm-color-emphasis-200)', background: f.type.startsWith('image/') ? '#10b98108' : 'var(--ifm-color-emphasis-50,rgba(0,0,0,0.015))', transition: 'all 0.2s' }}>
+                <span style={{ fontSize: '20px' }}>{fileIcon(f.type)}</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: '600', fontSize: '13px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</div>
+                  <div style={{ fontSize: '11px', color: 'var(--ifm-color-emphasis-500)', display: 'flex', gap: '8px', marginTop: '2px' }}>
+                    <span style={{ fontFamily: 'monospace' }}>{fmtSize(f.size)}</span>
+                    <span>{f.type}</span>
+                    {f.type.startsWith('image/') && <span style={{ color: '#10b981', fontWeight: '600' }}>미리보기 가능 (URL.createObjectURL)</span>}
+                  </div>
+                </div>
+                <span style={{ padding: '2px 8px', borderRadius: '12px', background: 'var(--ifm-color-emphasis-100)', color: 'var(--ifm-color-emphasis-500)', fontFamily: 'monospace', fontSize: '11px', fontWeight: '700' }}>index {i}</span>
+                <button onClick={() => removeFile(f.id, f.name)} style={{ padding: '4px 10px', borderRadius: '6px', border: '1px solid #ef444440', background: '#ef444408', color: '#ef4444', fontSize: '12px', cursor: 'pointer', fontWeight: '700', flexShrink: 0 }}>✕</button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* 컨트롤 버튼 */}
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '16px' }}>
+          <button onClick={addFile} disabled={mockIdx >= MOCK_FILES.length} style={{ padding: '8px 18px', borderRadius: '8px', border: 'none', background: mockIdx < MOCK_FILES.length ? '#3b82f6' : 'var(--ifm-color-emphasis-300)', color: mockIdx < MOCK_FILES.length ? '#fff' : 'var(--ifm-color-content-secondary)', fontWeight: '700', fontSize: '13px', cursor: mockIdx < MOCK_FILES.length ? 'pointer' : 'not-allowed', transition: 'all 0.2s' }}>
+            + 파일 추가 {mockIdx < MOCK_FILES.length ? `(${MOCK_FILES[mockIdx].name})` : '(목록 소진)'}
+          </button>
+          <button onClick={reset} style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--ifm-color-emphasis-300)', background: 'transparent', color: 'var(--ifm-color-content-secondary)', fontSize: '13px', cursor: 'pointer' }}>↺ 초기화</button>
+        </div>
+
+        {/* 이벤트 로그 */}
+        {log.length > 0 && (
+          <div style={{ borderRadius: '10px', border: '1px solid var(--ifm-color-emphasis-200)', overflow: 'hidden' }}>
+            <div style={{ padding: '7px 14px', background: 'var(--ifm-color-emphasis-100)', fontSize: '11px', fontWeight: '700', color: 'var(--ifm-color-emphasis-500)' }}>DataTransfer 이벤트 로그</div>
+            {log.map(entry => (
+              <div key={entry.id} style={{ padding: '7px 14px', borderTop: '1px solid var(--ifm-color-emphasis-100)', fontSize: '11px', color: entry.color, fontFamily: 'monospace' }}>{entry.msg}</div>
+            ))}
+          </div>
+        )}
+
+        <div style={{ marginTop: '12px', padding: '10px 14px', borderRadius: '8px', background: 'var(--ifm-color-emphasis-100)', fontSize: '12px', color: 'var(--ifm-color-emphasis-500)', lineHeight: '1.7' }}>
+          실제 환경에서는 <code>input.addEventListener('change', e =&gt; …)</code>로 새 선택을 DataTransfer에 누적하고,<br/>
+          삭제 후 <code>input.files = dt.files</code>로 재교체하면 브라우저가 파일을 정확히 인식합니다.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+{/* ────────────────────────────────────────────────────────────
+    Component 4: 다운로드 응답 헤더 빌더
+──────────────────────────────────────────────────────────── */}
+export function DownloadHeaderBuilder() {
+  const [contentType, setContentType] = useState('application/octet-stream');
+  const [disposition, setDisposition] = useState('attachment');
+  const [fileName, setFileName] = useState('보고서_2026Q1.pdf');
+  const [useEncode, setUseEncode] = useState(true);
+
+  const encodeFileName = (name) => {
+    try { return encodeURIComponent(name).replace(/'/g, '%27'); }
+    catch { return name; }
+  };
+
+  const displayName = useEncode ? encodeFileName(fileName) : fileName;
+  const hasKorean = /[가-힣]/.test(fileName);
+
+  const contentTypes = [
+    { value: 'application/octet-stream', label: 'octet-stream', desc: '모든 바이너리 파일 — 다운로드 강제' },
+    { value: 'application/pdf',          label: 'PDF',          desc: 'PDF — 브라우저가 열 수 있으면 inline 가능' },
+    { value: 'image/jpeg',               label: 'JPEG',         desc: '이미지 — inline 설정 시 브라우저에서 바로 표시' },
+    { value: 'text/plain; charset=UTF-8', label: 'TEXT',        desc: '텍스트 파일 — disposition에 따라 표시/다운로드 결정' },
+  ];
+
+  const dispositions = [
+    { value: 'attachment', label: 'attachment', desc: '반드시 다운로드 — 파일 저장 대화상자 표시', color: '#10b981' },
+    { value: 'inline',     label: 'inline',     desc: '브라우저에서 직접 표시 시도 (PDF, 이미지 등)', color: '#3b82f6' },
+  ];
+
+  const getResult = () => {
+    if (disposition === 'attachment') return { text: '💾 파일 저장 대화상자 표시 → 다운로드', color: '#10b981', bg: '#f0fdf4', border: '#86efac' };
+    if (contentType.startsWith('image/')) return { text: '🖼️ 브라우저에서 이미지 직접 표시', color: '#3b82f6', bg: '#eff6ff', border: '#93c5fd' };
+    if (contentType === 'application/pdf') return { text: '📕 브라우저 PDF 뷰어로 열기 (내장 뷰어 지원 시)', color: '#8b5cf6', bg: '#f5f3ff', border: '#c4b5fd' };
+    return { text: '💾 octet-stream + inline = 브라우저마다 동작 다를 수 있음 → attachment 권장', color: '#f59e0b', bg: '#fef3c7', border: '#fcd34d' };
+  };
+
+  const result = getResult();
+  const header1 = `Content-Type: ${contentType}`;
+  const header2 = `Content-Disposition: ${disposition}; filename="${displayName}"`;
+
+  const wrap = { margin: '32px 0', borderRadius: '18px', overflow: 'hidden', border: '1px solid var(--ifm-color-emphasis-300)', background: 'var(--ifm-background-surface-color)' };
+
+  return (
+    <div style={wrap}>
+      <div style={{ padding: '16px 24px', borderBottom: '1px solid var(--ifm-color-emphasis-200)', fontWeight: '700', fontSize: '15px' }}>📤 다운로드 응답 헤더 빌더</div>
+
+      <div style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: '18px' }}>
+
+        {/* Content-Type */}
+        <div>
+          <div style={{ fontSize: '12px', fontWeight: '700', color: 'var(--ifm-color-emphasis-500)', marginBottom: '8px' }}>Content-Type</div>
+          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+            {contentTypes.map(ct => (
+              <button key={ct.value} onClick={() => setContentType(ct.value)} title={ct.desc} style={{ padding: '6px 14px', borderRadius: '8px', border: `2px solid ${contentType === ct.value ? '#f59e0b' : 'var(--ifm-color-emphasis-300)'}`, background: contentType === ct.value ? '#f59e0b18' : 'transparent', color: contentType === ct.value ? '#f59e0b' : 'var(--ifm-color-content-secondary)', fontWeight: '700', fontSize: '12px', cursor: 'pointer', transition: 'all 0.15s', fontFamily: 'monospace' }}>
+                {ct.label}
+              </button>
+            ))}
+          </div>
+          <div style={{ marginTop: '6px', fontSize: '11px', color: 'var(--ifm-color-emphasis-400)' }}>{contentTypes.find(c => c.value === contentType)?.desc}</div>
+        </div>
+
+        {/* Content-Disposition */}
+        <div>
+          <div style={{ fontSize: '12px', fontWeight: '700', color: 'var(--ifm-color-emphasis-500)', marginBottom: '8px' }}>Content-Disposition</div>
+          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+            {dispositions.map(d => (
+              <button key={d.value} onClick={() => setDisposition(d.value)} style={{ padding: '6px 16px', borderRadius: '8px', border: `2px solid ${disposition === d.value ? d.color : 'var(--ifm-color-emphasis-300)'}`, background: disposition === d.value ? `${d.color}15` : 'transparent', color: disposition === d.value ? d.color : 'var(--ifm-color-content-secondary)', fontWeight: '700', fontSize: '12px', cursor: 'pointer', transition: 'all 0.15s' }}>
+                {d.label}
+              </button>
+            ))}
+          </div>
+          <div style={{ marginTop: '6px', fontSize: '11px', color: 'var(--ifm-color-emphasis-400)' }}>{dispositions.find(d => d.value === disposition)?.desc}</div>
+        </div>
+
+        {/* 파일명 & 인코딩 */}
+        <div>
+          <div style={{ fontSize: '12px', fontWeight: '700', color: 'var(--ifm-color-emphasis-500)', marginBottom: '8px' }}>filename (직접 입력)</div>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+            <input value={fileName} onChange={e => setFileName(e.target.value)} style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid var(--ifm-color-emphasis-300)', background: 'var(--ifm-background-color)', color: 'var(--ifm-color-content)', fontSize: '13px', width: '220px', fontFamily: 'monospace' }} />
+            <button onClick={() => setUseEncode(v => !v)} style={{ padding: '7px 14px', borderRadius: '8px', border: `2px solid ${useEncode ? '#8b5cf6' : 'var(--ifm-color-emphasis-300)'}`, background: useEncode ? '#8b5cf615' : 'transparent', color: useEncode ? '#8b5cf6' : 'var(--ifm-color-content-secondary)', fontWeight: '700', fontSize: '12px', cursor: 'pointer', transition: 'all 0.15s' }}>
+              URLEncoder {useEncode ? 'ON' : 'OFF'}
+            </button>
+            {hasKorean && !useEncode && (
+              <span style={{ fontSize: '11px', color: '#ef4444', fontWeight: '600' }}>⚠️ 한글 포함 — 인코딩 없으면 브라우저 깨짐</span>
+            )}
+          </div>
+        </div>
+
+        {/* 생성된 헤더 미리보기 */}
+        <div style={{ padding: '14px 16px', borderRadius: '10px', background: 'var(--ifm-code-background)', border: '1px solid var(--ifm-color-emphasis-200)', fontFamily: 'monospace', fontSize: '12px', lineHeight: '1.8' }}>
+          <div style={{ color: '#10b981', fontWeight: '600' }}>{header1}</div>
+          <div style={{ color: '#3b82f6', fontWeight: '600', wordBreak: 'break-all' }}>{header2}</div>
+        </div>
+
+        {/* 예상 브라우저 동작 */}
+        <div style={{ padding: '12px 16px', borderRadius: '10px', background: result.bg, border: `1px solid ${result.border}`, fontSize: '13px', color: result.color, fontWeight: '600' }}>
+          {result.text}
+        </div>
+
+        <div style={{ padding: '10px 14px', borderRadius: '8px', background: 'var(--ifm-color-emphasis-100)', fontSize: '12px', color: 'var(--ifm-color-emphasis-500)', fontFamily: 'monospace', lineHeight: '1.8' }}>
+          {`// Java 서블릿 코드 예시\nresponse.setContentType("${contentType}");\nString encoded = URLEncoder.encode(fileName, StandardCharsets.UTF_8);\nresponse.setHeader("Content-Disposition", "${disposition}; filename=\\"" + encoded + "\\"");`}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+오늘은 서블릿/JSP 프로젝트에서 **파일 업로드·다운로드 전 과정**을 구현했다. Maven 의존성 구성부터 `@MultipartConfig`, `Part.write()`, 스트림 전송, 프론트엔드 DataTransfer UX까지 연결하고, 스프링 부트 전환을 위한 환경 설정으로 마무리했다.
+
+<!-- truncate -->
+
+## 데이터 단위 — 저장 크기의 기준
+
+파일 업로드 설정(`maxFileSize`, `maxRequestSize`)은 모두 **바이트 단위**다. 단위를 헷갈리면 설정값 계산에서 실수가 생긴다.
+
+<DataUnitConverter />
+
+| 연산 | 예시 | 결과 |
+|---|---|---|
+| `1 MB` | `1024 * 1024` | 1,048,576 B |
+| `50 MB` | `50 * 1024 * 1024` | 52,428,800 B |
+| `200 MB` | `200 * 1024 * 1024` | 209,715,200 B |
+
+> 1 KB = 1000 B가 아니다. 이진 단위는 **1 KB = 1024 B**. 스토리지 제조사는 10진수(1,000)를 쓰기도 하지만 Java와 OS는 모두 1024 기준이다.
+
+---
+
+## 프로젝트 구성 — Jakarta 전환
+
+톰캣 10+는 `javax.*`에서 `jakarta.*`로 패키지가 바뀐다. Maven 의존성을 잘못 잡으면 컴파일은 되지만 배포 시 `ClassNotFoundException`이 발생한다.
+
+```xml
+<!-- pom.xml — 핵심 의존성 -->
+<!-- Servlet API: provided (톰캣 내장) -->
+<dependency>
+    <groupId>jakarta.servlet</groupId>
+    <artifactId>jakarta.servlet-api</artifactId>
+    <version>6.0.0</version>
+    <scope>provided</scope>
+</dependency>
+
+<!-- JSTL: API + 구현체 분리 -->
+<dependency>
+    <groupId>jakarta.servlet.jsp.jstl</groupId>
+    <artifactId>jakarta.servlet.jsp.jstl-api</artifactId>
+    <version>3.0.0</version>
+</dependency>
+<dependency>
+    <groupId>org.glassfish.web</groupId>
+    <artifactId>jakarta.servlet.jsp.jstl</artifactId>
+    <version>3.0.1</version>
+</dependency>
+
+<!-- Commons FileUpload (선택) / IO -->
+<dependency>
+    <groupId>commons-fileupload</groupId>
+    <artifactId>commons-fileupload</artifactId>
+    <version>1.6.0</version>
+</dependency>
+```
+
+| 항목 | Tomcat 9 (Legacy) | Tomcat 10+ |
+|---|---|---|
+| Servlet API | `javax.servlet` | `jakarta.servlet` |
+| JSTL | `javax.servlet.jsp.jstl` | `jakarta.servlet.jsp.jstl` |
+| Dynamic Web Module | 4.0 | 6.0 |
+| Java 최소 요구 | 8 | 11+ (권장 21) |
+
+---
+
+## 업로드 폼 — multipart/form-data
+
+파일 전송의 핵심은 `<form>` 속성 두 개다. 하나라도 빠지면 서버에 파일이 도달하지 않는다.
+
+```html
+<%-- JSP 업로드 폼 --%>
+<form action="./upload.do" method="post" enctype="multipart/form-data">
+    <input type="text"  name="title"  placeholder="제목">
+    <textarea name="content"></textarea>
+    <input type="file"  name="files"  id="fileInput" multiple>
+    <button type="button" onclick="submitForm()">업로드</button>
+</form>
+```
+
+| 속성 | 기본값 | 파일 업로드 시 |
+|---|---|---|
+| `method` | GET | 반드시 **POST** |
+| `enctype` | `application/x-www-form-urlencoded` | 반드시 **`multipart/form-data`** |
+| `multiple` | 없음 | 다중 파일 선택 허용 |
+
+기본 `<input type="file">`는 새 선택이 기존을 덮어쓴다. 누적 선택은 `DataTransfer`로 해결한다.
+
+---
+
+## 업로드 서블릿 — @MultipartConfig + Parts
+
+<FileFlowViz />
+
+```java
+@WebServlet("/upload.do")
+@MultipartConfig(
+    fileSizeThreshold = 1024 * 1024,        // 1 MB: 이 이상이면 디스크에 임시 저장
+    maxFileSize       = 50 * 1024 * 1024,   // 단일 파일 최대: 50 MB
+    maxRequestSize    = 200 * 1024 * 1024   // 요청 전체 최대: 200 MB
+)
+public class UploadServlet extends HttpServlet {
+
+    @Override
+    protected void doPost(HttpServletRequest request, HttpServletResponse response)
+            throws ServletException, IOException {
+
+        request.setCharacterEncoding("UTF-8");
+
+        // 텍스트 파라미터는 기존과 동일
+        String title   = request.getParameter("title");
+        String content = request.getParameter("content");
+
+        // 업로드 경로 결정 (배포된 실제 경로)
+        String uploadPath = getServletContext().getRealPath("/uploads");
+        File dir = new File(uploadPath);
+        if (!dir.exists()) dir.mkdirs(); // 디렉터리 없으면 생성
+
+        List<String> uploadedFiles = new ArrayList<>();
+
+        // 모든 멀티파트 항목 순회
+        for (Part part : request.getParts()) {
+            String fileName = part.getSubmittedFileName(); // null이면 텍스트 파트
+            if (fileName != null && !fileName.isEmpty()) {
+                // 파일 파트만 저장
+                part.write(uploadPath + File.separator + fileName);
+                uploadedFiles.add(fileName);
+            }
+        }
+
+        request.setAttribute("fileList", uploadedFiles);
+        request.setAttribute("title", title);
+        RequestDispatcher rd = request.getRequestDispatcher("/index.jsp");
+        rd.forward(request, response);
+    }
+}
+```
+
+> `getRealPath("/uploads")`는 톰캣이 실제 배포한 경로를 반환한다. Eclipse는 Catalina base 아래 가상 배포를 사용하므로 콘솔 로그에서 실제 위치를 확인해야 한다.
+
+---
+
+## 다운로드 서블릿 — 헤더와 스트림
+
+<DownloadHeaderBuilder />
+
+```java
+@WebServlet("/download.do")
+public class DownloadServlet extends HttpServlet {
+
+    @Override
+    protected void doGet(HttpServletRequest request, HttpServletResponse response)
+            throws ServletException, IOException {
+
+        String fileName  = request.getParameter("fileName");
+        String uploadPath = getServletContext().getRealPath("/uploads");
+        File file = new File(uploadPath, fileName);
+
+        if (!file.exists()) {
+            response.sendError(HttpServletResponse.SC_NOT_FOUND);
+            return;
+        }
+
+        // 브라우저에 다운로드 강제
+        response.setContentType("application/octet-stream");
+
+        // 한글 파일명 인코딩 (URLEncoder로 처리)
+        String encodedName = URLEncoder.encode(fileName, StandardCharsets.UTF_8)
+                                       .replace("+", "%20");
+        response.setHeader("Content-Disposition",
+                "attachment; filename=\"" + encodedName + "\"");
+
+        // 스트림 버퍼 전송 — try-with-resources로 자동 close
+        byte[] buf = new byte[4096]; // 4 KB 버퍼
+        int len;
+        try (InputStream in  = new FileInputStream(file);
+             OutputStream out = response.getOutputStream()) {
+            while ((len = in.read(buf)) != -1) {
+                out.write(buf, 0, len);
+            }
+        }
+    }
+}
+```
+
+---
+
+## 업로드 목록 출력 — JSTL forEach
+
+서블릿이 `request.setAttribute("fileList", list)`로 전달한 데이터를 JSP에서 렌더링한다.
+
+```jsp
+<%-- index.jsp 파일 목록 출력 --%>
+<c:choose>
+    <c:when test="${empty fileList}">
+        <p>업로드된 파일이 없습니다.</p>
+    </c:when>
+    <c:otherwise>
+        <ul>
+            <c:forEach var="name" items="${fileList}">
+                <li>
+                    ${name}
+                    <a href="./download.do?fileName=${name}">다운로드</a>
+                </li>
+            </c:forEach>
+        </ul>
+    </c:otherwise>
+</c:choose>
+```
+
+- **forward**: `request` 스코프 유지 → JSP에서 `${fileList}` 접근 가능
+- **redirect**: 새 요청 → `request` 스코프 소멸 → 목록 전달 불가
+
+---
+
+## 프론트엔드 UX — DataTransfer 파일 누적 선택
+
+기본 `<input type="file">`는 새로 선택하면 기존이 덮어진다. `DataTransfer`로 누적 관리한다.
+
+<DataTransferDemo />
+
+```javascript
+const fileInput  = document.getElementById('fileInput');
+let dataTransfer = new DataTransfer(); // 선택 파일 누적 저장소
+
+// 1. 파일 선택 시 — 기존 목록에 추가
+fileInput.addEventListener('change', (e) => {
+    for (const file of e.target.files) {
+        dataTransfer.items.add(file);
+    }
+    fileInput.files = dataTransfer.files; // input에 반영
+    renderFileList();
+});
+
+// 2. 개별 삭제
+function removeFile(index) {
+    dataTransfer.items.remove(index);
+    fileInput.files = dataTransfer.files; // 재교체 필수
+    renderFileList();
+}
+
+// 3. 렌더링 — 이미지 미리보기 포함
+function renderFileList() {
+    const ul = document.getElementById('fileList');
+    ul.innerHTML = '';
+
+    // 이전 미리보기 URL 해제 (메모리 누수 방지)
+    ul.querySelectorAll('img').forEach(img => URL.revokeObjectURL(img.src));
+
+    Array.from(fileInput.files).forEach((file, i) => {
+        const li = document.createElement('li');
+        li.textContent = `${file.name} (${(file.size / 1024).toFixed(1)} KB)`;
+
+        // 이미지 파일만 미리보기
+        if (file.type.startsWith('image/')) {
+            const img = document.createElement('img');
+            img.src = URL.createObjectURL(file); // 브라우저 메모리에 임시 URL 생성
+            img.style.cssText = 'width:60px; height:60px; object-fit:cover;';
+            li.prepend(img);
+        }
+
+        const btn = document.createElement('button');
+        btn.textContent = '삭제';
+        btn.onclick = () => removeFile(i);
+        li.append(btn);
+        ul.append(li);
+    });
+}
+```
+
+| 기능 | 핵심 API | 포인트 |
+|---|---|---|
+| 파일 누적 | `DataTransfer.items.add(file)` | `input.files` 직접 교체 필수 |
+| 개별 삭제 | `DataTransfer.items.remove(i)` | 삭제 후 재렌더링 |
+| 이미지 미리보기 | `URL.createObjectURL(file)` | `type.startsWith('image/')` 검사 |
+| 메모리 해제 | `URL.revokeObjectURL(url)` | 렌더링 전 이전 URL 정리 |
+
+---
+
+## 스프링 부트 전환 대비 — 인코딩, PAT, Git 설정
+
+| 항목 | 목적 | 핵심 포인트 |
+|---|---|---|
+| Eclipse UTF-8 설정 | 한글 깨짐 방지 | `Preferences → Content Types` — CSS/HTML/JS/JSON/Properties/YAML 모두 UTF-8 → **Update 클릭 필수** |
+| GitHub PAT 발급 | 개발도구 인증 | `Developer Settings → Tokens (classic)` — `repo` 권한 체크 / 토큰은 즉시 저장 (재조회 불가) |
+| Git user.name/email | 커밋 작성자 식별 | `Preferences → Version Control → Configuration` 또는 `git config --global` |
+
+```bash
+# CLI로 Git 전역 설정 (Eclipse 설정과 동일 효과)
+git config --global user.name  "이름"
+git config --global user.email "이메일@example.com"
+```
+
+스프링 부트로 넘어가면 `@MultipartConfig` 대신 `spring.servlet.multipart.*` 프로퍼티 한 줄로, `URLEncoder` 인코딩 대신 `ResourceHttpRequestHandler`가 헤더를 자동 처리한다. 서블릿 레벨에서 직접 구현한 오늘 코드가 스프링 추상화의 "무엇을 대신해주는지" 이해의 기준이 된다.
+
+---
+
+## 정리
+
+```
+multipart/form-data 폼 전송
+  → @MultipartConfig 검사 (크기 제한)
+  → request.getParts() 순회
+    → 텍스트 파트: getParameter()
+    → 파일 파트: getSubmittedFileName() → part.write(path)
+  → request.setAttribute("fileList", list)
+  → forward → JSP 목록 렌더링
+
+다운로드 요청
+  → File.exists() 검증
+  → Content-Type: application/octet-stream
+  → Content-Disposition: attachment; filename="URLEncoded명"
+  → InputStream → OutputStream (4KB 버퍼)
+  → try-with-resources 자동 해제
+```
+
+| 계층 | 핵심 구현 | 스프링 부트 대응 |
+|---|---|---|
+| 설정 | `@MultipartConfig` | `spring.servlet.multipart.max-file-size` |
+| 업로드 | `Part.write()` | `MultipartFile.transferTo()` |
+| 경로 | `getRealPath()` | `ResourceLoader`, `@Value` 경로 주입 |
+| 다운로드 | 수동 헤더 + 스트림 | `ResponseEntity<Resource>` + `ContentDisposition` |
+| 인코딩 | `URLEncoder.encode()` | `ResourceHttpRequestHandler` 자동 처리 |

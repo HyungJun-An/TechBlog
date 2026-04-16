@@ -40,6 +40,29 @@ const config = {
     locales: ['ko'],
   },
 
+  plugins: [
+    // Three.js / R3F는 브라우저 전용 — SSR 빌드 단계에서 평가되면 ReferenceError 발생
+    // configureWebpack으로 서버 사이드 번들에서 제외시켜 silent crash 방지
+    function threeJsSsrFix() {
+      return {
+        name: 'three-js-ssr-fix',
+        configureWebpack(_config, isServer) {
+          if (!isServer) return {};
+          return {
+            module: {
+              rules: [
+                {
+                  test: /node_modules\/(three|@react-three)\//,
+                  use: 'null-loader',
+                },
+              ],
+            },
+          };
+        },
+      };
+    },
+  ],
+
   presets: [
     [
       'classic',
