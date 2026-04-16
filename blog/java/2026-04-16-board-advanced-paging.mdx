@@ -1,0 +1,736 @@
+---
+title: "답변형 게시판 확장 — 다중 삭제·Filter 접근 제어·페이징"
+date: 2026-04-16
+authors: HyungJun
+tags: [Web, Java]
+---
+
+import { useState, useEffect, useRef } from 'react';
+
+{/* ────────────────────────────────────────────────────────────
+    Component 1: 체크박스 다중 삭제 시뮬레이터
+──────────────────────────────────────────────────────────── */}
+export function CheckboxDeleteDemo() {
+  const initialRows = [
+    { seq: 5, title: '게시글 제목 5', author: '홍길동', deletedYn: 'N' },
+    { seq: 4, title: '게시글 제목 4', author: '이순신', deletedYn: 'N' },
+    { seq: 3, title: '게시글 제목 3', author: '강감찬', deletedYn: 'N' },
+    { seq: 2, title: '게시글 제목 2', author: '유관순', deletedYn: 'N' },
+    { seq: 1, title: '게시글 제목 1', author: '김유신', deletedYn: 'N' },
+  ];
+
+  const [rows, setRows] = useState(initialRows);
+  const [checked, setChecked] = useState(Array(initialRows.length).fill(false));
+  const [allChecked, setAllChecked] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const [msgType, setMsgType] = useState('warn');
+
+  // 삭제 가능한(deletedYn=N) 행만 체크 카운트
+  const checkedCount = checked.filter((c, i) => c && rows[i].deletedYn === 'N').length;
+
+  // 전체선택 → 삭제 안된 행만 동기화
+  const toggleAll = () => {
+    const next = !allChecked;
+    setAllChecked(next);
+    setChecked(rows.map(row => (row.deletedYn === 'Y' ? false : next)));
+    setMsg(null);
+  };
+
+  // 하위 → 전체선택 역동기화 (삭제 안된 행 기준)
+  const toggleOne = (i) => {
+    if (rows[i].deletedYn === 'Y') return; // 이미 삭제된 행은 무시
+    const next = [...checked];
+    next[i] = !next[i];
+    setChecked(next);
+    const activeCount = rows.filter(r => r.deletedYn === 'N').length;
+    setAllChecked(next.filter((c, idx) => c && rows[idx].deletedYn === 'N').length === activeCount);
+    setMsg(null);
+  };
+
+  // submit 유효성 → SweetAlert 스타일 confirm
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const handleSubmit = () => {
+    if (checkedCount === 0) {
+      setMsg('선택된 글이 없습니다.'); setMsgType('warn'); return;
+    }
+    setConfirmOpen(true);
+  };
+  const handleConfirm = () => {
+    setConfirmOpen(false);
+    // 체크된 행의 deletedYn을 'Y'로 변경
+    setRows(prev => prev.map((row, i) => (checked[i] && row.deletedYn === 'N' ? { ...row, deletedYn: 'Y' } : row)));
+    setMsg(`${checkedCount}개 삭제 완료 (시뮬레이션)`); setMsgType('success');
+    setChecked(Array(initialRows.length).fill(false)); setAllChecked(false);
+  };
+  const handleCancel = () => {
+    setConfirmOpen(false);
+    setMsg('삭제가 진행되지 않습니다.'); setMsgType('info');
+  };
+  const handleReset = () => {
+    setRows(initialRows);
+    setChecked(Array(initialRows.length).fill(false));
+    setAllChecked(false);
+    setMsg(null);
+    setConfirmOpen(false);
+  };
+
+  const wrap = { margin: '32px 0', borderRadius: '18px', overflow: 'hidden', border: '1px solid var(--ifm-color-emphasis-300)', background: 'var(--ifm-background-surface-color)' };
+  const th = { padding: '10px 14px', fontSize: '12px', fontWeight: '700', color: 'var(--ifm-color-emphasis-500)', borderBottom: '1px solid var(--ifm-color-emphasis-200)', background: 'var(--ifm-color-emphasis-100)', textAlign: 'left' };
+  const td = (active, deleted) => ({ padding: '10px 14px', fontSize: '13px', borderBottom: '1px solid var(--ifm-color-emphasis-100)', background: deleted ? '#fff1f2' : active ? '#eff6ff' : 'transparent', transition: 'background 0.2s', opacity: deleted ? 0.6 : 1 });
+
+  return (
+    <div style={wrap}>
+      <div style={{ padding: '16px 24px', borderBottom: '1px solid var(--ifm-color-emphasis-200)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ fontWeight: '700', fontSize: '15px' }}>☑️ 체크박스 다중 삭제 시뮬레이터</div>
+        <span style={{ fontSize: '12px', padding: '3px 10px', borderRadius: '20px', background: checkedCount > 0 ? '#dbeafe' : 'var(--ifm-color-emphasis-100)', color: checkedCount > 0 ? '#1d4ed8' : 'var(--ifm-color-emphasis-500)', fontWeight: '700', transition: 'all 0.2s' }}>
+          {checkedCount} / {rows.filter(r => r.deletedYn === 'N').length} 선택됨
+        </span>
+      </div>
+
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr>
+              <th style={{ ...th, width: '48px', textAlign: 'center' }}>
+                <input type="checkbox" checked={allChecked} onChange={toggleAll}
+                  style={{ width: '15px', height: '15px', cursor: 'pointer', accentColor: '#3b82f6' }} />
+              </th>
+              <th style={{ ...th, width: '60px' }}>SEQ</th>
+              <th style={th}>제목</th>
+              <th style={th}>작성자</th>
+              <th style={{ ...th, width: '80px', textAlign: 'center' }}>삭제여부</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, i) => {
+              const isDeleted = row.deletedYn === 'Y';
+              return (
+                <tr key={row.seq}>
+                  <td style={{ ...td(checked[i], isDeleted), textAlign: 'center' }}>
+                    <input type="checkbox" name="ch" value={row.seq} checked={checked[i]} onChange={() => toggleOne(i)}
+                      disabled={isDeleted}
+                      style={{ width: '15px', height: '15px', cursor: isDeleted ? 'not-allowed' : 'pointer', accentColor: '#3b82f6' }} />
+                  </td>
+                  <td style={td(checked[i], isDeleted)}>{row.seq}</td>
+                  <td style={{ ...td(checked[i], isDeleted), fontWeight: checked[i] ? '600' : '400', color: isDeleted ? '#9ca3af' : checked[i] ? '#1d4ed8' : 'var(--ifm-color-content)', textDecoration: isDeleted ? 'line-through' : 'none' }}>{row.title}</td>
+                  <td style={td(checked[i], isDeleted)}>{row.author}</td>
+                  <td style={{ ...td(checked[i], isDeleted), textAlign: 'center' }}>
+                    <span style={{ display: 'inline-block', padding: '2px 10px', borderRadius: '12px', fontSize: '11px', fontWeight: '700',
+                      background: isDeleted ? '#fee2e2' : '#dcfce7',
+                      color: isDeleted ? '#b91c1c' : '#15803d',
+                      border: `1px solid ${isDeleted ? '#fca5a5' : '#86efac'}` }}>
+                      {row.deletedYn}
+                    </span>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <div style={{ padding: '14px 24px', borderTop: '1px solid var(--ifm-color-emphasis-200)', display: 'flex', gap: '8px', alignItems: 'center' }}>
+        <button onClick={handleSubmit} style={{ padding: '8px 20px', borderRadius: '8px', border: 'none', background: '#ef4444', color: '#fff', fontWeight: '700', fontSize: '13px', cursor: 'pointer' }}>
+          선택 삭제
+        </button>
+        <button onClick={handleReset} style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--ifm-color-emphasis-300)', background: 'transparent', color: 'var(--ifm-color-content-secondary)', fontSize: '13px', cursor: 'pointer' }}>↺ 초기화</button>
+        <span style={{ fontSize: '11px', color: 'var(--ifm-color-emphasis-400)' }}>삭제하면 삭제여부가 N → Y로 변경됩니다</span>
+      </div>
+
+      {/* 메시지 배너 */}
+      {msg && !confirmOpen && (
+        <div style={{ margin: '0 24px 16px', padding: '11px 16px', borderRadius: '10px', fontSize: '13px', fontWeight: '600',
+          background: msgType === 'warn' ? '#fef3c7' : msgType === 'success' ? '#f0fdf4' : '#eff6ff',
+          color: msgType === 'warn' ? '#92400e' : msgType === 'success' ? '#166534' : '#1e40af',
+          border: `1px solid ${msgType === 'warn' ? '#fcd34d' : msgType === 'success' ? '#86efac' : '#93c5fd'}` }}>
+          {msgType === 'warn' ? '⚠️ ' : msgType === 'success' ? '✅ ' : 'ℹ️ '}{msg}
+        </div>
+      )}
+
+      {/* Swal 스타일 confirm 오버레이 */}
+      {confirmOpen && (
+        <div style={{ position: 'relative', margin: '0 24px 16px' }}>
+          <div style={{ padding: '20px', borderRadius: '14px', border: '2px solid #3b82f6', background: 'var(--ifm-background-surface-color)', boxShadow: '0 8px 24px rgba(0,0,0,0.12)', textAlign: 'center' }}>
+            <div style={{ fontSize: '28px', marginBottom: '10px' }}>🗑️</div>
+            <div style={{ fontWeight: '700', fontSize: '15px', marginBottom: '6px' }}>다중삭제를 진행하시겠습니까?</div>
+            <div style={{ fontSize: '12px', color: 'var(--ifm-color-emphasis-500)', marginBottom: '16px' }}>{checkedCount}개의 게시글이 삭제됩니다. (삭제여부: N → Y)</div>
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
+              <button onClick={handleConfirm} style={{ padding: '8px 22px', borderRadius: '8px', border: 'none', background: '#ef4444', color: '#fff', fontWeight: '700', fontSize: '13px', cursor: 'pointer' }}>삭제</button>
+              <button onClick={handleCancel} style={{ padding: '8px 22px', borderRadius: '8px', border: '1px solid var(--ifm-color-emphasis-300)', background: 'transparent', color: 'var(--ifm-color-content-secondary)', fontWeight: '700', fontSize: '13px', cursor: 'pointer' }}>취소</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+{/* ────────────────────────────────────────────────────────────
+    Component 2: 콜백 함정 vs Promise 체인 시각화
+──────────────────────────────────────────────────────────── */}
+export function CallbackVsPromise() {
+  const [mode, setMode] = useState('callback');
+  const [step, setStep] = useState(-1);
+  const [running, setRunning] = useState(false);
+  const timerRef = useRef(null);
+
+  const CALLBACK_STEPS = [
+    { label: '버튼 클릭 → 이벤트 핸들러 진입', color: '#3b82f6', depth: 0, code: 'btn.addEventListener("click", function() {' },
+    { label: '유효성 검사 콜백', color: '#8b5cf6', depth: 1, code: '  if (cnt <= 0) { alert("없음"); return; }' },
+    { label: 'confirm 다이얼로그 콜백', color: '#f59e0b', depth: 2, code: '  confirm("삭제?", function(ok) {' },
+    { label: 'isConfirmed 분기 콜백', color: '#ef4444', depth: 3, code: '    if (ok) { Swal.fire("완료", ..., function() {' },
+    { label: 'submit 실행 콜백', color: '#10b981', depth: 4, code: '      document.forms[0].submit();' },
+    { label: '      }) } else { ... }', color: '#6b7280', depth: 3, code: '    }) }' },
+    { label: '  })', color: '#6b7280', depth: 2, code: '  })' },
+    { label: '});  ← 콜백 지옥', color: '#ef4444', depth: 0, code: '});  // 중첩 4단계 → 콜백 지옥' },
+  ];
+
+  const PROMISE_STEPS = [
+    { label: '버튼 클릭 → preventDefault', color: '#3b82f6', depth: 0, code: 'btn.addEventListener("click", (e) => {' },
+    { label: 'e.preventDefault()  // 기본 submit 차단', color: '#8b5cf6', depth: 1, code: '  e.preventDefault();' },
+    { label: '체크 유효성 검사', color: '#f59e0b', depth: 1, code: '  if (chCheckCount() === 0) { Swal.fire("없음"); return; }' },
+    { label: 'Swal.fire() → Promise 반환', color: '#06b6d4', depth: 1, code: '  Swal.fire({ title: "삭제?", ... })' },
+    { label: '.then(result => {   // Promise 체인', color: '#10b981', depth: 2, code: '  .then((result) => {' },
+    { label: 'result.isConfirmed 분기', color: '#10b981', depth: 3, code: '    if (result.isConfirmed) {' },
+    { label: 'Swal.fire("완료").then(() => submit)', color: '#10b981', depth: 4, code: '      Swal.fire("저장","","success").then(() => forms[0].submit());' },
+    { label: '    } else { Swal.fire("취소") }', color: '#6b7280', depth: 3, code: '    } else { Swal.fire("취소","","info"); }' },
+    { label: '  });  ← 평탄한 체인 구조', color: '#3b82f6', depth: 0, code: '  });' },
+  ];
+
+  const steps = mode === 'callback' ? CALLBACK_STEPS : PROMISE_STEPS;
+
+  const run = () => {
+    setStep(-1); setRunning(true);
+    let i = 0;
+    const next = () => {
+      setStep(i); i++;
+      if (i < steps.length) timerRef.current = setTimeout(next, 500);
+      else setRunning(false);
+    };
+    timerRef.current = setTimeout(next, 200);
+  };
+  const reset = () => { clearTimeout(timerRef.current); setStep(-1); setRunning(false); };
+
+  useEffect(() => { reset(); }, [mode]);
+  useEffect(() => () => clearTimeout(timerRef.current), []);
+
+  const wrap = { margin: '32px 0', borderRadius: '18px', overflow: 'hidden', border: '1px solid var(--ifm-color-emphasis-300)', background: 'var(--ifm-background-surface-color)' };
+
+  return (
+    <div style={wrap}>
+      <div style={{ padding: '16px 24px', borderBottom: '1px solid var(--ifm-color-emphasis-200)' }}>
+        <div style={{ fontWeight: '700', fontSize: '15px', marginBottom: '12px' }}>🔄 콜백 지옥 vs Promise 체인</div>
+        <div style={{ display: 'flex', gap: '6px' }}>
+          {[['callback', '콜백 방식 (지옥)', '#ef4444'], ['promise', 'Promise .then() 체인', '#10b981']].map(([k, label, color]) => (
+            <button key={k} onClick={() => setMode(k)} style={{ padding: '7px 14px', borderRadius: '8px', border: `2px solid ${mode === k ? color : 'var(--ifm-color-emphasis-300)'}`, background: mode === k ? `${color}15` : 'transparent', color: mode === k ? color : 'var(--ifm-color-content-secondary)', fontWeight: '700', fontSize: '12px', cursor: 'pointer', transition: 'all 0.2s' }}>
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+        {steps.map((s, i) => {
+          const isActive = i === step;
+          const isPast = i < step;
+          return (
+            <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', padding: '8px 12px', borderRadius: '8px', background: isActive ? `${s.color}15` : 'transparent', border: `1px solid ${isActive ? s.color : 'transparent'}`, opacity: step === -1 ? 0.7 : isPast || isActive ? 1 : 0.3, transition: 'all 0.3s', marginLeft: `${s.depth * 16}px` }}>
+              <span style={{ minWidth: '16px', fontSize: '12px', color: isPast ? '#10b981' : isActive ? s.color : 'var(--ifm-color-emphasis-300)' }}>
+                {isPast ? '✓' : isActive ? '▶' : '○'}
+              </span>
+              <div>
+                <div style={{ fontSize: '11px', fontWeight: isActive ? '700' : '500', color: isActive ? s.color : 'var(--ifm-color-content-secondary)', marginBottom: '2px' }}>{s.label}</div>
+                <div style={{ fontFamily: 'monospace', fontSize: '11px', color: 'var(--ifm-color-emphasis-500)' }}>{s.code}</div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{ padding: '14px 24px', borderTop: '1px solid var(--ifm-color-emphasis-200)', display: 'flex', gap: '8px', alignItems: 'center' }}>
+        <button onClick={run} disabled={running} style={{ padding: '8px 18px', borderRadius: '8px', border: 'none', background: running ? 'var(--ifm-color-emphasis-300)' : (mode === 'callback' ? '#ef4444' : '#10b981'), color: running ? 'var(--ifm-color-content-secondary)' : '#fff', fontWeight: '700', fontSize: '13px', cursor: running ? 'not-allowed' : 'pointer', transition: 'all 0.2s' }}>
+          {running ? '실행 중...' : '▶ 실행'}
+        </button>
+        <button onClick={reset} style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid var(--ifm-color-emphasis-300)', background: 'transparent', color: 'var(--ifm-color-content-secondary)', fontSize: '13px', cursor: 'pointer' }}>↺ 초기화</button>
+        {step === -1 && <span style={{ fontSize: '11px', color: 'var(--ifm-color-emphasis-400)' }}>모드를 선택하고 ▶ 실행을 눌러보세요</span>}
+      </div>
+    </div>
+  );
+}
+
+{/* ────────────────────────────────────────────────────────────
+    Component 3: Filter 접근 제어 흐름 시뮬레이터
+──────────────────────────────────────────────────────────── */}
+export function FilterAccessSim() {
+  const EXCLUDE_URLS = ['/login', '/login.do', '/register', '/register.do', '/css/', '/js/', '/images/'];
+  const EXAMPLE_URLS = [
+    { url: '/board/list.do', label: '게시판 목록', protected: true },
+    { url: '/board/detail.do?seq=1', label: '게시글 상세', protected: true },
+    { url: '/login.do', label: '로그인 폼', protected: false },
+    { url: '/register.do', label: '회원가입', protected: false },
+    { url: '/admin/realDelete.do', label: '관리자 삭제', protected: true },
+    { url: '/css/main.css', label: '정적 CSS', protected: false },
+  ];
+
+  const [selectedUrl, setSelectedUrl] = useState(null);
+  const [loggedIn, setLoggedIn] = useState(false);
+  const [step, setStep] = useState(-1);
+  const [running, setRunning] = useState(false);
+  const timerRef = useRef(null);
+
+  const isExcluded = (url) => EXCLUDE_URLS.some(ex => url.startsWith(ex));
+
+  const run = (url) => {
+    setSelectedUrl(url);
+    setStep(0); setRunning(true);
+    const excluded = isExcluded(url.url);
+    const maxStep = excluded ? 2 : (loggedIn ? 4 : 5);
+    let i = 1;
+    const next = () => {
+      setStep(i);
+      if (i < maxStep) { i++; timerRef.current = setTimeout(next, 600); }
+      else setRunning(false);
+    };
+    timerRef.current = setTimeout(next, 400);
+  };
+
+  const reset = () => { clearTimeout(timerRef.current); setStep(-1); setRunning(false); setSelectedUrl(null); };
+
+  useEffect(() => () => clearTimeout(timerRef.current), []);
+
+  const getSteps = () => {
+    if (!selectedUrl) return [];
+    const excluded = isExcluded(selectedUrl.url);
+    return [
+      { icon: '🖥️', label: `요청 수신: ${selectedUrl.url}`, color: '#3b82f6' },
+      { icon: '🔌', label: 'Filter.doFilter() 진입 — 인코딩 설정', color: '#8b5cf6' },
+      ...(excluded
+        ? [{ icon: '✅', label: `예외 URL 해당 → chain.doFilter() 통과`, color: '#10b981' }]
+        : [
+          { icon: '🔍', label: `예외 URL 아님 → 세션 검사`, color: '#f59e0b' },
+          ...(loggedIn
+            ? [{ icon: '✅', label: '세션에 loginDto 존재 → chain.doFilter() 통과', color: '#10b981' }]
+            : [
+              { icon: '❌', label: 'session.getAttribute("loginDto") == null', color: '#ef4444' },
+              { icon: '🔀', label: 'RequestDispatcher.forward() → 로그인 폼', color: '#ef4444' },
+            ]
+          ),
+        ]
+      ),
+    ];
+  };
+
+  const steps = getSteps();
+  const wrap = { margin: '32px 0', borderRadius: '18px', overflow: 'hidden', border: '1px solid var(--ifm-color-emphasis-300)', background: 'var(--ifm-background-surface-color)' };
+
+  return (
+    <div style={wrap}>
+      <div style={{ padding: '16px 24px', borderBottom: '1px solid var(--ifm-color-emphasis-200)' }}>
+        <div style={{ fontWeight: '700', fontSize: '15px', marginBottom: '14px' }}>🚦 Filter 세션 접근 제어 시뮬레이터</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
+          <span style={{ fontSize: '13px', fontWeight: '600' }}>세션 상태:</span>
+          <button onClick={() => { setLoggedIn(!loggedIn); reset(); }} style={{ padding: '6px 14px', borderRadius: '8px', border: `2px solid ${loggedIn ? '#10b981' : '#ef4444'}`, background: loggedIn ? '#f0fdf4' : '#fef2f2', color: loggedIn ? '#166534' : '#991b1b', fontWeight: '700', fontSize: '12px', cursor: 'pointer', transition: 'all 0.2s' }}>
+            {loggedIn ? '🔓 로그인됨' : '🔒 비로그인'}
+          </button>
+          <span style={{ fontSize: '11px', color: 'var(--ifm-color-emphasis-400)' }}>클릭으로 토글</span>
+        </div>
+        <div style={{ fontSize: '11px', fontWeight: '700', color: 'var(--ifm-color-emphasis-500)', marginBottom: '8px' }}>URL을 선택해 Filter 흐름을 확인하세요</div>
+        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+          {EXAMPLE_URLS.map((u, i) => {
+            const excluded = isExcluded(u.url);
+            return (
+              <button key={i} onClick={() => { reset(); setTimeout(() => run(u), 100); }} disabled={running}
+                style={{ padding: '6px 12px', borderRadius: '8px', border: `1px solid ${u === selectedUrl ? '#3b82f6' : 'var(--ifm-color-emphasis-200)'}`, background: u === selectedUrl ? '#eff6ff' : 'var(--ifm-color-emphasis-100)', color: u.protected ? '#dc2626' : '#16a34a', fontWeight: '600', fontSize: '11px', cursor: running ? 'not-allowed' : 'pointer', transition: 'all 0.2s' }}>
+                {excluded ? '🟢' : '🔴'} {u.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div style={{ padding: '20px 24px', minHeight: '160px' }}>
+        {steps.length === 0
+          ? <div style={{ color: 'var(--ifm-color-emphasis-400)', fontSize: '13px', textAlign: 'center', marginTop: '20px' }}>위에서 URL을 선택하면 Filter 흐름이 표시됩니다</div>
+          : steps.map((s, i) => {
+            const isActive = i === step;
+            const isPast = i < step;
+            return (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 14px', borderRadius: '10px', background: isActive ? `${s.color}15` : isPast ? 'rgba(16,185,129,0.06)' : 'var(--ifm-color-emphasis-100)', border: `2px solid ${isActive ? s.color : isPast ? 'rgba(16,185,129,0.3)' : 'var(--ifm-color-emphasis-200)'}`, opacity: step === -1 ? 0.6 : isPast || isActive ? 1 : 0.3, transition: 'all 0.3s', marginBottom: '8px' }}>
+                <span style={{ fontSize: '18px' }}>{isPast ? '✅' : s.icon}</span>
+                <span style={{ fontSize: '13px', fontWeight: isActive ? '700' : '500', color: isActive ? s.color : isPast ? '#10b981' : 'var(--ifm-color-content)' }}>{s.label}</span>
+                {isActive && <div style={{ marginLeft: 'auto', width: '8px', height: '8px', borderRadius: '50%', background: s.color, boxShadow: `0 0 8px ${s.color}`, flexShrink: 0 }} />}
+              </div>
+            );
+          })
+        }
+      </div>
+
+      {selectedUrl && !running && step >= 0 && (
+        <div style={{ margin: '0 24px 16px', padding: '12px 16px', borderRadius: '10px', fontSize: '12px', fontWeight: '600',
+          background: steps[steps.length - 1]?.color === '#10b981' ? '#f0fdf4' : '#fef2f2',
+          color: steps[steps.length - 1]?.color === '#10b981' ? '#166534' : '#991b1b',
+          border: `1px solid ${steps[steps.length - 1]?.color === '#10b981' ? '#86efac' : '#fca5a5'}` }}>
+          {steps[steps.length - 1]?.color === '#10b981'
+            ? `✅ 접근 허용 — ${selectedUrl.url}`
+            : `❌ 접근 차단 → 로그인 폼으로 forward — ${selectedUrl.url}`}
+        </div>
+      )}
+
+      <div style={{ padding: '14px 24px', borderTop: '1px solid var(--ifm-color-emphasis-200)' }}>
+        <button onClick={reset} style={{ padding: '7px 14px', borderRadius: '8px', border: '1px solid var(--ifm-color-emphasis-300)', background: 'transparent', color: 'var(--ifm-color-content-secondary)', fontSize: '13px', cursor: 'pointer' }}>↺ 초기화</button>
+      </div>
+    </div>
+  );
+}
+
+{/* ────────────────────────────────────────────────────────────
+    Component 4: 페이징 연산 계산기
+──────────────────────────────────────────────────────────── */}
+export function PagingCalculator() {
+  const [totalCount, setTotalCount] = useState(115);
+  const [pageSize, setPageSize] = useState(10);
+  const [pageBlock, setPageBlock] = useState(5);
+  const [currentPage, setCurrentPage] = useState(1);
+
+  const totalPage = Math.ceil(totalCount / pageSize) || 1;
+  const safeCurrentPage = Math.max(1, Math.min(currentPage, totalPage));
+  const offset = (safeCurrentPage - 1) * pageSize;
+  const startPage = Math.floor((safeCurrentPage - 1) / pageBlock) * pageBlock + 1;
+  const endPage = Math.min(startPage + pageBlock - 1, totalPage);
+  const hasPrevGroup = startPage > 1;
+  const hasNextGroup = endPage < totalPage;
+
+  const calcItems = [
+    { label: 'totalPage', formula: 'Math.ceil(totalCount / pageSize)', value: totalPage, color: '#8b5cf6' },
+    { label: 'offset', formula: '(currentPage - 1) × pageSize', value: offset, color: '#3b82f6' },
+    { label: 'startPage', formula: 'Math.floor((currentPage-1)/pageBlock) × pageBlock + 1', value: startPage, color: '#f59e0b' },
+    { label: 'endPage', formula: 'Math.min(startPage + pageBlock - 1, totalPage)', value: endPage, color: '#10b981' },
+  ];
+
+  const wrap = { margin: '32px 0', borderRadius: '18px', overflow: 'hidden', border: '1px solid var(--ifm-color-emphasis-300)', background: 'var(--ifm-background-surface-color)' };
+  const inputStyle = { width: '70px', padding: '6px 8px', borderRadius: '8px', border: '1px solid var(--ifm-color-emphasis-300)', background: 'var(--ifm-background-color)', color: 'var(--ifm-color-content)', fontSize: '14px', fontWeight: '700', textAlign: 'center', fontFamily: 'monospace' };
+
+  return (
+    <div style={wrap}>
+      <div style={{ padding: '16px 24px', borderBottom: '1px solid var(--ifm-color-emphasis-200)', fontWeight: '700', fontSize: '15px' }}>📐 페이징 연산 계산기</div>
+
+      {/* 입력 파라미터 */}
+      <div style={{ padding: '20px 24px', display: 'flex', gap: '20px', flexWrap: 'wrap', borderBottom: '1px solid var(--ifm-color-emphasis-200)' }}>
+        {[
+          ['totalCount', totalCount, setTotalCount, 1, 9999],
+          ['pageSize', pageSize, setPageSize, 1, 100],
+          ['pageBlock', pageBlock, setPageBlock, 1, 20],
+          ['currentPage', currentPage, setCurrentPage, 1, totalPage],
+        ].map(([label, val, setter, min, max]) => (
+          <div key={label}>
+            <div style={{ fontSize: '11px', fontWeight: '700', color: 'var(--ifm-color-emphasis-500)', marginBottom: '6px', fontFamily: 'monospace' }}>{label}</div>
+            <input type="number" value={val} min={min} max={max}
+              onChange={e => setter(Math.max(min, Math.min(max, Number(e.target.value) || min)))}
+              style={inputStyle} />
+          </div>
+        ))}
+      </div>
+
+      {/* 계산 결과 */}
+      <div style={{ padding: '16px 24px', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '10px', borderBottom: '1px solid var(--ifm-color-emphasis-200)' }}>
+        {calcItems.map(item => (
+          <div key={item.label} style={{ padding: '14px', borderRadius: '12px', border: `2px solid ${item.color}40`, background: `${item.color}08` }}>
+            <div style={{ fontSize: '11px', fontWeight: '700', color: item.color, marginBottom: '4px', fontFamily: 'monospace' }}>{item.label}</div>
+            <div style={{ fontSize: '11px', color: 'var(--ifm-color-emphasis-400)', marginBottom: '8px' }}>{item.formula}</div>
+            <div style={{ fontSize: '28px', fontWeight: '800', color: item.color, fontFamily: 'monospace' }}>{item.value}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* 페이지네이션 UI 미리보기 */}
+      <div style={{ padding: '16px 24px' }}>
+        <div style={{ fontSize: '12px', fontWeight: '700', color: 'var(--ifm-color-emphasis-500)', marginBottom: '12px' }}>페이지네이션 UI 미리보기</div>
+        <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', alignItems: 'center' }}>
+          {hasPrevGroup && (
+            <>
+              <button onClick={() => setCurrentPage(1)} style={{ padding: '6px 10px', borderRadius: '6px', border: '1px solid var(--ifm-color-emphasis-300)', background: 'transparent', color: 'var(--ifm-color-content-secondary)', fontSize: '12px', cursor: 'pointer' }}>«</button>
+              <button onClick={() => setCurrentPage(startPage - 1)} style={{ padding: '6px 10px', borderRadius: '6px', border: '1px solid var(--ifm-color-emphasis-300)', background: 'transparent', color: 'var(--ifm-color-content-secondary)', fontSize: '12px', cursor: 'pointer' }}>‹</button>
+            </>
+          )}
+          {Array.from({ length: endPage - startPage + 1 }, (_, i) => startPage + i).map(p => (
+            <button key={p} onClick={() => setCurrentPage(p)} style={{ padding: '6px 12px', borderRadius: '6px', border: `2px solid ${p === safeCurrentPage ? '#3b82f6' : 'var(--ifm-color-emphasis-200)'}`, background: p === safeCurrentPage ? '#3b82f6' : 'transparent', color: p === safeCurrentPage ? '#fff' : 'var(--ifm-color-content)', fontSize: '13px', fontWeight: p === safeCurrentPage ? '700' : '400', cursor: 'pointer', transition: 'all 0.15s' }}>
+              {p}
+            </button>
+          ))}
+          {hasNextGroup && (
+            <>
+              <button onClick={() => setCurrentPage(endPage + 1)} style={{ padding: '6px 10px', borderRadius: '6px', border: '1px solid var(--ifm-color-emphasis-300)', background: 'transparent', color: 'var(--ifm-color-content-secondary)', fontSize: '12px', cursor: 'pointer' }}>›</button>
+              <button onClick={() => setCurrentPage(totalPage)} style={{ padding: '6px 10px', borderRadius: '6px', border: '1px solid var(--ifm-color-emphasis-300)', background: 'transparent', color: 'var(--ifm-color-content-secondary)', fontSize: '12px', cursor: 'pointer' }}>»</button>
+            </>
+          )}
+        </div>
+        <div style={{ marginTop: '10px', fontSize: '11px', color: 'var(--ifm-color-emphasis-400)' }}>
+          offset: {offset}행 건너뜀 → FETCH NEXT {pageSize} ROWS ONLY
+        </div>
+      </div>
+    </div>
+  );
+}
+
+오늘은 답변형 게시판을 확장해 **관리자 완전 삭제**, **체크박스 다중 삭제**, **SweetAlert2 confirm 흐름**, **서블릿 Filter 접근 제어**, **OFFSET/FETCH 페이징**까지 구현했다. 핵심은 체크박스 상태 동기화, 콜백에서 Promise로 이어지는 비동기 제어, 그리고 페이지네이션 수학 공식이다.
+
+<!-- truncate -->
+
+## 완전 삭제 — confirm과 물리 삭제
+
+관리자 버튼에서 `confirm()`을 호출하면 결과가 **Boolean**(true/false)으로 반환된다.
+
+```javascript
+function del(e) {
+  const ok = confirm("선택된 글이 완전 삭제됩니다.");
+  // ok는 true 또는 false — 객체가 아니므로 truthy 함정 없음
+  const seq = document.querySelector('input[name="seq"]').value;
+
+  if (ok === true) {
+    location.href = "./realDelete.do?seq=" + seq;
+  } else {
+    alert("삭제가 취소되었습니다.");
+  }
+}
+```
+
+> **주의** — 객체를 조건문에 넣으면 존재 자체만으로 `truthy`가 된다. `confirm()` 결과처럼 명확한 Boolean이 아닌 값은 `=== true`로 명시적 비교하는 습관이 안전하다.
+
+백엔드에서는 일반 `DELETE` 쿼리로 레코드를 제거한다. 논리 삭제(`delFlag`)와 달리 데이터가 완전히 사라지므로 **PK/FK Cascade 전략**을 DDL 레벨에서 미리 결정해야 한다.
+
+| 전략 | 동작 |
+|---|---|
+| **RESTRICT** | 자식 레코드 존재 시 삭제 거부 |
+| **CASCADE** | 부모 삭제 시 자식도 연쇄 삭제 |
+| **SET NULL** | 자식의 FK를 NULL로 변경 |
+
+---
+
+## GNB Active 처리 — this 스코프와 classList 전략
+
+`forEach` 콜백 안에서 `this`는 화살표 함수/일반 함수에 따라 바인딩이 달라진다. 이 문제를 피하는 패턴은 **클릭 대상을 변수에 저장**하는 것이다.
+
+```javascript
+document.addEventListener("DOMContentLoaded", function () {
+  const menus = document.querySelectorAll(".navbar-nav li");
+
+  menus.forEach(function (item) {
+    item.addEventListener("click", function () {
+      // ① this 대신 item 변수로 저장 — 클로저가 정확히 캡처함
+      const current = item;
+
+      // ② 전체 active 제거 → ③ 현재만 추가 (IF 분기 없음)
+      menus.forEach(function (other) {
+        other.classList.remove("active");
+      });
+      current.classList.add("active");
+    });
+  });
+});
+```
+
+**공통 JS에서 `window.onload`를 중복 정의하면 마지막 정의가 이전 것을 덮어쓴다.** `DOMContentLoaded`를 사용하고, 팀 개발 시에는 페이지별 JS 파일을 분리하거나 Webpack으로 번들링해 충돌을 방지한다.
+
+---
+
+## 체크박스 다중 삭제 — checked 동기화와 유효성
+
+체크박스 상태는 `value`가 아닌 **`checked` 프로퍼티**로 읽고 설정한다.
+
+```javascript
+// 전체선택 → 하위 동기화
+const allCh = document.getElementById("allCh");
+const chks  = document.getElementsByName("ch");
+
+allCh.addEventListener("change", function () {
+  chks.forEach(chk => chk.checked = allCh.checked);
+});
+
+// 하위 → 전체선택 역동기화
+chks.forEach(chk => {
+  chk.addEventListener("change", function () {
+    allCh.checked = chCheckCount() === chks.length;
+  });
+});
+
+// 체크 개수 카운트 함수
+function chCheckCount() {
+  let cnt = 0;
+  for (let i = 0; i < chks.length; i++) {
+    if (chks[i].checked === true) cnt++;
+  }
+  return cnt;
+}
+```
+
+submit 시 체크 개수가 0이면 alert 후 `return false` 또는 `event.preventDefault()`로 제출을 막는다.
+
+직접 체험해보자.
+
+<CheckboxDeleteDemo />
+
+---
+
+## SweetAlert2 — confirm 흐름과 콜백 함정
+
+SweetAlert2의 `Swal.fire()`는 **Promise를 반환**한다. `.then(result =>)` 안에서 `result.isConfirmed`로 사용자 선택을 분기한다.
+
+```javascript
+function chkSubmit(event) {
+  event.preventDefault(); // 기본 submit 차단
+
+  if (chCheckCount() <= 0) {
+    Swal.fire("선택된 글이 없습니다.");
+    return;
+  }
+
+  Swal.fire({
+    title: "다중삭제를 진행하시겠습니까?",
+    icon: "warning",
+    showCancelButton: true,
+    confirmButtonText: "삭제",
+    cancelButtonText: "취소"
+  }).then((result) => {
+    if (result.isConfirmed) {
+      Swal.fire("삭제 완료", "", "success").then(() => {
+        document.forms[0].submit(); // 성공 알림 닫힌 후 submit
+      });
+    } else {
+      Swal.fire("삭제가 진행되지 않습니다.", "", "info");
+    }
+  });
+}
+```
+
+콜백 방식으로 중첩을 쌓으면 **콜백 지옥(callback hell)**이 생긴다. Promise `.then()` 체인은 같은 로직을 평탄하게 표현하며, 이것이 `async/await`로 이어지는 비동기 진화의 배경이다.
+
+<CallbackVsPromise />
+
+---
+
+## 서블릿 Filter — 세션 기반 접근 제어
+
+Filter는 모든 요청을 가로채 공통 로직을 처리하는 서블릿 전처리 지점이다. 인증 체크, 인코딩, 로깅 등 **횡단 관심사**를 서블릿마다 중복 작성하지 않고 한 곳에 집중시킨다.
+
+```java
+@WebFilter("/*") // 모든 요청에 적용
+public class SessionFilter implements Filter {
+
+    // 인증 없이 통과할 예외 URL 목록
+    private static final String[] EXCLUDE_URLS = {
+        "/login", "/login.do", "/register", "/register.do",
+        "/css/", "/js/", "/images/"
+    };
+
+    @Override
+    public void doFilter(ServletRequest req, ServletResponse res, FilterChain chain)
+            throws IOException, ServletException {
+
+        HttpServletRequest  request  = (HttpServletRequest)  req;
+        HttpServletResponse response = (HttpServletResponse) res;
+
+        // 인코딩 공통 처리
+        request.setCharacterEncoding("UTF-8");
+
+        String path = request.getServletPath();
+
+        // 예외 URL이면 바로 통과
+        if (isExcluded(path)) {
+            chain.doFilter(request, response);
+            return;
+        }
+
+        // 세션 검사 — 로그인 DTO 없으면 로그인 폼으로 forward
+        HttpSession session = request.getSession(false);
+        Object loginDto = (session != null) ? session.getAttribute("loginDto") : null;
+
+        if (loginDto == null) {
+            RequestDispatcher rd = request.getRequestDispatcher("/login.jsp");
+            rd.forward(request, response);
+            return;
+        }
+
+        chain.doFilter(request, response); // 통과
+    }
+
+    private boolean isExcluded(String path) {
+        for (String ex : EXCLUDE_URLS) {
+            if (path.startsWith(ex)) return true;
+        }
+        return false;
+    }
+}
+```
+
+> Spring Boot에서는 이 Filter 개념이 **Spring Security**로 대체된다. `permitAll()`, `authenticated()` 설정이 바로 이 로직을 선언적으로 표현한 것이다.
+
+<FilterAccessSim />
+
+---
+
+## 페이징 — 두 개의 쿼리와 수학 공식
+
+페이징의 본질은 **두 쿼리**다.
+
+1. 현재 페이지에 표시할 데이터 목록 (`OFFSET / FETCH`)
+2. 전체 데이터 개수 (`COUNT(*)`) — 페이지네이션 버튼 생성용
+
+```sql
+-- 목록 쿼리 (pageSize=10, 2페이지 → offset=10)
+SELECT * FROM board
+ORDER BY seq DESC
+OFFSET #{offset} ROWS FETCH NEXT #{pageSize} ROWS ONLY;
+
+-- 카운트 쿼리
+SELECT COUNT(*) FROM board;
+```
+
+MyBatis에서는 파라미터를 `Map`으로 넘긴다.
+
+```java
+// 서블릿에서 계산 후 MyBatis에 전달
+String pageParam = request.getParameter("page");
+int currentPage = (pageParam == null) ? 1 : Integer.parseInt(pageParam);
+// ↑ GET 파라미터: 키 자체가 없으면 null, 키는 있고 값만 없으면 ""
+
+int pageSize  = 10;
+int pageBlock = 5;
+int offset    = (currentPage - 1) * pageSize;
+int totalCount = dao.selectCountBoard();
+int totalPage  = (int) Math.ceil((double) totalCount / pageSize);
+
+int startPage = ((currentPage - 1) / pageBlock) * pageBlock + 1;
+int endPage   = Math.min(startPage + pageBlock - 1, totalPage);
+
+Map<String, Object> params = new HashMap<>();
+params.put("offset",   offset);
+params.put("pageSize", pageSize);
+
+List<BoardDto> list = dao.selectPagingBoard(params);
+```
+
+JSP에서 역순 연번 출력:
+
+```jsp
+<%-- totalCount에서 현재 오프셋과 루프 인덱스를 빼면 역순 번호 --%>
+${totalCount - ((currentPage - 1) * pageSize) - vs.index}
+```
+
+파라미터를 직접 바꿔가며 계산 결과를 확인해보자.
+
+<PagingCalculator />
+
+---
+
+## 정리
+
+| 주제 | 핵심 |
+|---|---|
+| 완전 삭제 | `confirm()` → Boolean, `location.href`로 이동 |
+| GNB Active | `current` 변수 저장 후 전체 remove → add |
+| 다중 삭제 | `checked` 프로퍼티, 전체선택 역동기화, `chCheckCount()` |
+| SweetAlert2 | `Swal.fire().then(result => result.isConfirmed)` |
+| Filter | `getServletPath()` → 예외 URL 제외 → 세션 검사 → forward |
+| 페이징 | 두 쿼리(OFFSET/COUNT), startPage/endPage/offset 공식 |
+
+Filter 도입 후 서블릿 내 중복 세션 체크 코드를 제거할 수 있고, Spring Security로 전환하면 이 전략이 `SecurityFilterChain` 설정 한 블록으로 압축된다.
