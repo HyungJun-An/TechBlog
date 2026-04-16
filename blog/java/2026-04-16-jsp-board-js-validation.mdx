@@ -1,0 +1,698 @@
+---
+title: "JSP 게시판 완성 — JSTL 리스트, XSS 방지, JS 폼 가드"
+date: 2026-04-16
+authors: HyungJun
+tags: [Java, Web]
+---
+
+import { useState, useEffect, useRef } from 'react';
+
+{/* ────────────────────────────────────────────────────────────
+    Component 1: 게시판 MVC 흐름 시뮬레이션
+──────────────────────────────────────────────────────────── */}
+export function BoardMvcFlowViz() {
+  const SCENARIOS = [
+    {
+      label: '리스트 조회',
+      method: 'GET',
+      color: '#3b82f6',
+      steps: [
+        { icon: '🖥️', label: 'GET /boardList2', sub: '브라우저 → 컨트롤러', color: '#3b82f6' },
+        { icon: '🔌', label: 'BoardListServlet.doGet()', sub: '요청 수신', color: '#8b5cf6' },
+        { icon: '🗄️', label: 'DAO.getBoardList()', sub: 'SELECT * FROM board ORDER BY reRef, seq → List<BoardDto>', color: '#06b6d4' },
+        { icon: '📦', label: 'request.setAttribute("list", list)', sub: 'Request 스코프에 저장', color: '#f59e0b' },
+        { icon: '🔀', label: 'forward → boardList.jsp', sub: 'WEB-INF/views/boardList.jsp', color: '#10b981' },
+        { icon: '📄', label: 'c:forEach 반복 출력', sub: 'depth*20px 들여쓰기, delFlag 분기, fn:length로 역번호 계산', color: '#10b981' },
+      ],
+    },
+    {
+      label: '글 작성',
+      method: 'POST',
+      color: '#10b981',
+      steps: [
+        { icon: '🖥️', label: 'POST /insertBoard2', sub: 'title, content 전송 (id는 세션에서 획득)', color: '#3b82f6' },
+        { icon: '🔌', label: 'InsertBoardServlet.doPost()', sub: 'request.setCharacterEncoding("UTF-8")', color: '#8b5cf6' },
+        { icon: '📦', label: 'getParameter() → BoardDto 생성', sub: 'id: (String) session.getAttribute("loginDto").getId()', color: '#f59e0b' },
+        { icon: '🗄️', label: 'DAO.insertBoard(dto)', sub: 'INSERT INTO board → int cnt', color: '#06b6d4' },
+        { icon: '🔁', label: 'sendRedirect("/boardList2")', sub: 'POST → redirect → GET 패턴 (중복 제출 방지)', color: '#10b981' },
+        { icon: '📋', label: '리스트 화면 갱신', sub: '새 GET 요청으로 목록 재조회', color: '#10b981' },
+      ],
+    },
+    {
+      label: '상세 보기',
+      method: 'GET',
+      color: '#8b5cf6',
+      steps: [
+        { icon: '🖥️', label: 'GET /detailBoard2?seq=1', sub: '제목 앵커 클릭 → seq 쿼리스트링 전달', color: '#3b82f6' },
+        { icon: '🔌', label: 'DetailBoardServlet.doGet()', sub: 'int seq = Integer.parseInt(getParameter("seq"))', color: '#8b5cf6' },
+        { icon: '🗄️', label: 'DAO.getDetail(seq)', sub: 'SELECT * FROM board WHERE seq=? → BoardDto', color: '#06b6d4' },
+        { icon: '👁️', label: 'DAO.updateViewCnt(seq)', sub: 'UPDATE board SET viewCnt = viewCnt + 1 WHERE seq=?', color: '#f59e0b' },
+        { icon: '📦', label: 'request.setAttribute("dto", dto)', sub: 'Request 스코프 저장', color: '#f59e0b' },
+        { icon: '📄', label: 'forward → detailBoard.jsp', sub: 'c:if로 수정/삭제/답글 버튼 권한 분기 (admin/작성자 비교)', color: '#10b981' },
+      ],
+    },
+    {
+      label: '답글 작성',
+      method: 'POST',
+      color: '#f59e0b',
+      steps: [
+        { icon: '🖥️', label: 'POST /replyBoard2', sub: '부모 seq, content 전송', color: '#3b82f6' },
+        { icon: '🔌', label: 'ReplyBoardServlet.doPost()', sub: 'int seq = Integer.parseInt(getParameter("seq"))', color: '#8b5cf6' },
+        { icon: '🗄️', label: 'DAO.getDetail(seq) — 부모글 조회', sub: 'depth, reRef 계산을 위해 부모 정보 필요', color: '#06b6d4' },
+        { icon: '📦', label: 'DTO 구성 — 답글 메타 계산', sub: 'depth = parent.depth + 1, reRef = parent.reRef(또는 seq)', color: '#f59e0b' },
+        { icon: '🗄️', label: 'DAO.replyBoard(dto)', sub: 'INSERT INTO board (depth, reRef, content, ...)', color: '#06b6d4' },
+        { icon: '🔁', label: 'sendRedirect("/boardList2")', sub: '리스트에서 depth*20px 들여쓰기로 표시됨', color: '#10b981' },
+      ],
+    },
+  ];
+
+  const [scenario, setScenario] = useState(0);
+  const [active, setActive] = useState(-1);
+  const [running, setRunning] = useState(false);
+  const timerRef = useRef(null);
+  const sc = SCENARIOS[scenario];
+
+  const run = () => {
+    setActive(-1);
+    setRunning(true);
+    let i = 0;
+    const next = () => {
+      setActive(i);
+      i++;
+      if (i < sc.steps.length) timerRef.current = setTimeout(next, 650);
+      else setRunning(false);
+    };
+    timerRef.current = setTimeout(next, 200);
+  };
+
+  const reset = () => { clearTimeout(timerRef.current); setActive(-1); setRunning(false); };
+  const changeScenario = (idx) => { reset(); setScenario(idx); };
+
+  useEffect(() => () => clearTimeout(timerRef.current), []);
+
+  const wrap = { margin: '32px 0', borderRadius: '18px', overflow: 'hidden', border: '1px solid var(--ifm-color-emphasis-300)', background: 'var(--ifm-background-surface-color)' };
+
+  return (
+    <div style={wrap}>
+      <div style={{ padding: '18px 24px', borderBottom: '1px solid var(--ifm-color-emphasis-200)' }}>
+        <div style={{ fontWeight: '700', fontSize: '15px', marginBottom: '12px' }}>📋 게시판 MVC 흐름 시뮬레이션</div>
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          {SCENARIOS.map((s, i) => (
+            <button key={i} onClick={() => changeScenario(i)} style={{ padding: '6px 14px', borderRadius: '8px', border: `2px solid ${scenario === i ? s.color : 'var(--ifm-color-emphasis-300)'}`, background: scenario === i ? `${s.color}15` : 'transparent', color: scenario === i ? s.color : 'var(--ifm-color-content-secondary)', fontWeight: '700', fontSize: '12px', cursor: 'pointer', transition: 'all 0.2s' }}>
+              <span style={{ marginRight: '5px', padding: '1px 5px', borderRadius: '4px', background: s.color, color: '#fff', fontSize: '10px' }}>{s.method}</span>
+              {s.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        {sc.steps.map((step, i) => {
+          const isPast = i < active;
+          const isCurrent = i === active;
+          const opacity = active === -1 ? 0.5 : (isPast || isCurrent ? 1 : 0.25);
+          const bg = isCurrent ? `${step.color}18` : isPast ? 'rgba(16,185,129,0.07)' : 'var(--ifm-color-emphasis-100)';
+          const border = isCurrent ? `2px solid ${step.color}` : isPast ? '2px solid rgba(16,185,129,0.3)' : '2px solid var(--ifm-color-emphasis-200)';
+          return (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '11px 14px', borderRadius: '10px', background: bg, border, opacity, transition: 'all 0.3s ease' }}>
+              <span style={{ fontSize: '18px', minWidth: '26px', textAlign: 'center' }}>{isPast ? '✅' : step.icon}</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: '700', fontSize: '13px', color: isCurrent ? step.color : isPast ? '#10b981' : 'var(--ifm-color-content)' }}>{step.label}</div>
+                <div style={{ fontSize: '11px', fontFamily: 'monospace', color: 'var(--ifm-color-emphasis-500)', marginTop: '2px' }}>{step.sub}</div>
+              </div>
+              {isCurrent && <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: step.color, flexShrink: 0, boxShadow: `0 0 8px ${step.color}` }} />}
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{ padding: '14px 24px', borderTop: '1px solid var(--ifm-color-emphasis-200)', display: 'flex', gap: '8px', alignItems: 'center' }}>
+        <button onClick={run} disabled={running} style={{ padding: '8px 18px', borderRadius: '8px', border: 'none', background: running ? 'var(--ifm-color-emphasis-300)' : sc.color, color: running ? 'var(--ifm-color-content-secondary)' : '#fff', fontWeight: '700', fontSize: '13px', cursor: running ? 'not-allowed' : 'pointer', transition: 'all 0.2s' }}>
+          {running ? '진행 중...' : '▶ 실행'}
+        </button>
+        <button onClick={reset} style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid var(--ifm-color-emphasis-300)', background: 'transparent', color: 'var(--ifm-color-content-secondary)', fontSize: '13px', cursor: 'pointer' }}>↺ 초기화</button>
+        {active === -1 && <span style={{ fontSize: '12px', color: 'var(--ifm-color-emphasis-400)' }}>시나리오를 선택하고 ▶ 실행을 눌러보세요</span>}
+      </div>
+    </div>
+  );
+}
+
+{/* ────────────────────────────────────────────────────────────
+    Component 2: 게시판 리스트 시뮬레이터 (depth 들여쓰기 + delFlag)
+──────────────────────────────────────────────────────────── */}
+export function ReplyBoardDemo() {
+  const initial = [
+    { seq: 1, title: '공지사항: 게시판 이용 안내', id: 'admin', depth: 0, reRef: 1, delFlag: 'N' },
+    { seq: 2, title: 'React vs JSP 어떤 게 나을까요?', id: 'user1', depth: 0, reRef: 2, delFlag: 'N' },
+    { seq: 3, title: 'Re: React vs JSP 어떤 게 나을까요?', id: 'admin', depth: 1, reRef: 2, delFlag: 'N' },
+    { seq: 4, title: 'Re: Re: 감사합니다! 많은 도움이 됐어요.', id: 'user1', depth: 2, reRef: 2, delFlag: 'N' },
+    { seq: 5, title: 'JPA와 MyBatis 차이점 질문', id: 'user2', depth: 0, reRef: 5, delFlag: 'N' },
+  ];
+  const [posts, setPosts] = useState(initial);
+
+  const toggleDel = (seq) => setPosts(prev => prev.map(p => p.seq === seq ? { ...p, delFlag: p.delFlag === 'N' ? 'Y' : 'N' } : p));
+  const addDepth = (seq) => setPosts(prev => prev.map(p => p.seq === seq ? { ...p, depth: Math.min(p.depth + 1, 3) } : p));
+  const subDepth = (seq) => setPosts(prev => prev.map(p => p.seq === seq ? { ...p, depth: Math.max(p.depth - 1, 0) } : p));
+  const reset = () => setPosts(initial);
+
+  const wrap = { margin: '32px 0', borderRadius: '18px', overflow: 'hidden', border: '1px solid var(--ifm-color-emphasis-300)', background: 'var(--ifm-background-surface-color)' };
+
+  return (
+    <div style={wrap}>
+      <div style={{ padding: '16px 24px', borderBottom: '1px solid var(--ifm-color-emphasis-200)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ fontWeight: '700', fontSize: '15px' }}>📑 리스트 렌더링 시뮬레이터</div>
+        <button onClick={reset} style={{ padding: '5px 12px', borderRadius: '8px', border: '1px solid var(--ifm-color-emphasis-300)', background: 'transparent', color: 'var(--ifm-color-content-secondary)', fontSize: '12px', cursor: 'pointer' }}>↺ 초기화</button>
+      </div>
+
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+          <thead>
+            <tr style={{ background: 'var(--ifm-color-emphasis-100)' }}>
+              {['SEQ', '제목 (depth*20px 들여쓰기 적용)', 'depth', 'delFlag', '조작'].map((h, i) => (
+                <th key={i} style={{ padding: '10px 14px', textAlign: i === 0 || i >= 2 ? 'center' : 'left', fontWeight: '700', color: 'var(--ifm-color-emphasis-600)', fontSize: '11px', whiteSpace: 'nowrap' }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {posts.map((p, i) => (
+              <tr key={p.seq} style={{ borderTop: '1px solid var(--ifm-color-emphasis-200)', background: i % 2 === 0 ? 'transparent' : 'var(--ifm-color-emphasis-50,rgba(0,0,0,0.02))' }}>
+                <td style={{ padding: '10px 14px', textAlign: 'center', color: 'var(--ifm-color-emphasis-500)', fontFamily: 'monospace', fontSize: '12px' }}>{p.seq}</td>
+                <td style={{ padding: '10px 14px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', paddingLeft: `${p.depth * 20}px`, transition: 'padding-left 0.2s' }}>
+                    {p.depth > 0 && (
+                      <span style={{ color: 'var(--ifm-color-emphasis-400)', fontSize: '13px', flexShrink: 0 }}>↳</span>
+                    )}
+                    {p.delFlag === 'Y' ? (
+                      <span style={{ color: 'var(--ifm-color-emphasis-400)', fontStyle: 'italic', fontSize: '13px' }}>관리자에 의해 삭제되었습니다.</span>
+                    ) : (
+                      <span style={{ color: 'var(--ifm-color-primary)', fontWeight: '500', fontSize: '13px', cursor: 'pointer' }}>{p.title}</span>
+                    )}
+                  </div>
+                </td>
+                <td style={{ padding: '10px 14px', textAlign: 'center' }}>
+                  <span style={{ padding: '2px 8px', borderRadius: '12px', background: p.depth > 0 ? '#8b5cf620' : 'var(--ifm-color-emphasis-100)', color: p.depth > 0 ? '#8b5cf6' : 'var(--ifm-color-emphasis-500)', fontSize: '12px', fontWeight: '700', fontFamily: 'monospace' }}>{p.depth}</span>
+                </td>
+                <td style={{ padding: '10px 14px', textAlign: 'center' }}>
+                  <span style={{ padding: '2px 8px', borderRadius: '12px', background: p.delFlag === 'Y' ? '#ef444420' : '#10b98120', color: p.delFlag === 'Y' ? '#ef4444' : '#10b981', fontSize: '12px', fontWeight: '700', fontFamily: 'monospace' }}>{p.delFlag}</span>
+                </td>
+                <td style={{ padding: '8px 14px', textAlign: 'center' }}>
+                  <div style={{ display: 'flex', gap: '4px', justifyContent: 'center' }}>
+                    <button onClick={() => subDepth(p.seq)} title="depth 감소" style={{ padding: '3px 7px', borderRadius: '5px', border: '1px solid var(--ifm-color-emphasis-300)', background: 'transparent', color: 'var(--ifm-color-content-secondary)', fontSize: '11px', cursor: 'pointer' }}>d-</button>
+                    <button onClick={() => addDepth(p.seq)} title="depth 증가" style={{ padding: '3px 7px', borderRadius: '5px', border: '1px solid var(--ifm-color-emphasis-300)', background: 'transparent', color: 'var(--ifm-color-content-secondary)', fontSize: '11px', cursor: 'pointer' }}>d+</button>
+                    <button onClick={() => toggleDel(p.seq)} style={{ padding: '3px 7px', borderRadius: '5px', border: `1px solid ${p.delFlag === 'Y' ? '#10b981' : '#ef4444'}`, background: 'transparent', color: p.delFlag === 'Y' ? '#10b981' : '#ef4444', fontSize: '11px', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                      {p.delFlag === 'Y' ? '복원' : '삭제'}
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ padding: '10px 24px', borderTop: '1px solid var(--ifm-color-emphasis-200)', fontSize: '11px', color: 'var(--ifm-color-emphasis-400)' }}>
+        d+ / d- 버튼으로 depth를 조절하고, 삭제 버튼으로 delFlag를 토글해보세요. JSP에서는 <code>c:forEach</code> + <code>c:if</code>로 이 로직을 구현합니다.
+      </div>
+    </div>
+  );
+}
+
+{/* ────────────────────────────────────────────────────────────
+    Component 3: XSS 방어 체험
+──────────────────────────────────────────────────────────── */}
+export function XssDefenseDemo() {
+  const [input, setInput] = useState('<script>alert("XSS!");</script>\n<b>굵은 글씨</b> 그냥 텍스트');
+  const [mode, setMode] = useState('raw');
+
+  const escape = (str) =>
+    str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/\n/g, '<br>');
+
+  const modes = [
+    { key: 'raw',    label: '방어 없음',       color: '#ef4444', desc: 'JSP: ${dto.content}  — EL 직접 출력, HTML 태그 그대로 해석' },
+    { key: 'cout',   label: 'c:out',           color: '#f59e0b', desc: 'JSP: <c:out value="${dto.content}"/>  — 출력 시 이스케이프' },
+    { key: 'regex',  label: 'JS 정규표현식',   color: '#3b82f6', desc: 'JS: str.replace(/</, "&lt;").replace(/>/, "&gt;") … 입력 단계 치환' },
+    { key: 'filter', label: '서버 필터',        color: '#10b981', desc: 'Filter + HttpServletRequestWrapper — 모든 getParameter() 전역 처리' },
+  ];
+
+  const getResult = () => {
+    if (mode === 'raw') return { html: input, isDanger: true };
+    return { html: escape(input), isDanger: false };
+  };
+
+  const result = getResult();
+  const cur = modes.find(m => m.key === mode);
+
+  const wrap = { margin: '32px 0', borderRadius: '18px', overflow: 'hidden', border: '1px solid var(--ifm-color-emphasis-300)', background: 'var(--ifm-background-surface-color)' };
+
+  return (
+    <div style={wrap}>
+      <div style={{ padding: '18px 24px', borderBottom: '1px solid var(--ifm-color-emphasis-200)', fontWeight: '700', fontSize: '15px' }}>🛡️ XSS 방어 체험</div>
+
+      <div style={{ padding: '20px 24px' }}>
+        <div style={{ marginBottom: '16px' }}>
+          <div style={{ fontSize: '12px', fontWeight: '700', color: 'var(--ifm-color-emphasis-500)', marginBottom: '6px' }}>textarea에 저장된 입력값 (수정 가능)</div>
+          <textarea
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            rows={3}
+            style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid var(--ifm-color-emphasis-300)', background: 'var(--ifm-background-color)', color: 'var(--ifm-color-content)', fontSize: '12px', fontFamily: 'monospace', resize: 'vertical', boxSizing: 'border-box' }}
+          />
+        </div>
+
+        <div style={{ marginBottom: '16px' }}>
+          <div style={{ fontSize: '12px', fontWeight: '700', color: 'var(--ifm-color-emphasis-500)', marginBottom: '8px' }}>방어 방식 선택</div>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '10px' }}>
+            {modes.map(m => (
+              <button key={m.key} onClick={() => setMode(m.key)} style={{ padding: '7px 14px', borderRadius: '8px', border: `2px solid ${mode === m.key ? m.color : 'var(--ifm-color-emphasis-300)'}`, background: mode === m.key ? `${m.color}15` : 'transparent', color: mode === m.key ? m.color : 'var(--ifm-color-content-secondary)', fontWeight: '700', fontSize: '12px', cursor: 'pointer', transition: 'all 0.2s' }}>
+                {m.label}
+              </button>
+            ))}
+          </div>
+          <div style={{ padding: '8px 12px', borderRadius: '8px', background: `${cur.color}10`, border: `1px solid ${cur.color}40`, fontFamily: 'monospace', fontSize: '11px', color: cur.color }}>
+            {cur.desc}
+          </div>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+          <div>
+            <div style={{ fontSize: '12px', fontWeight: '700', color: 'var(--ifm-color-emphasis-500)', marginBottom: '6px' }}>서버 → 브라우저 HTML 소스</div>
+            <div style={{ padding: '12px', borderRadius: '8px', background: 'var(--ifm-code-background)', fontFamily: 'monospace', fontSize: '11px', color: 'var(--ifm-color-content)', wordBreak: 'break-all', minHeight: '72px', border: '1px solid var(--ifm-color-emphasis-200)', whiteSpace: 'pre-wrap' }}>
+              {result.html}
+            </div>
+          </div>
+          <div>
+            <div style={{ fontSize: '12px', fontWeight: '700', color: 'var(--ifm-color-emphasis-500)', marginBottom: '6px' }}>브라우저 렌더링 결과</div>
+            <div style={{ padding: '12px', borderRadius: '8px', background: result.isDanger ? '#fef2f2' : '#f0fdf4', border: `1px solid ${result.isDanger ? '#fca5a5' : '#86efac'}`, fontSize: '13px', minHeight: '72px', wordBreak: 'break-all' }}>
+              {result.isDanger ? (
+                <span style={{ color: '#ef4444', fontWeight: '600' }}>⚠️ 스크립트 실행 + HTML 태그 해석됨<br/>(실제 환경이면 alert 팝업 발생)</span>
+              ) : (
+                <span style={{ color: '#166534', fontFamily: 'monospace', fontSize: '11px', whiteSpace: 'pre-wrap' }}>{result.html}</span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div style={{ marginTop: '12px', padding: '12px 14px', borderRadius: '8px', background: result.isDanger ? '#fef2f2' : '#f0fdf4', border: `1px solid ${result.isDanger ? '#fca5a5' : '#86efac'}`, fontSize: '12px', color: result.isDanger ? '#dc2626' : '#166534' }}>
+          {result.isDanger
+            ? '❌ 방어 없음: <script> 태그가 그대로 렌더링되어 공격자 코드가 실행됩니다.'
+            : `✅ ${cur.label}: ${
+                mode === 'cout'   ? 'JSP 출력 단계 이스케이프. 설정 누락 시 취약하므로 전역 대응 권장.' :
+                mode === 'regex'  ? 'JS 입력 단계 치환. 미리보기에도 활용 가능하지만 서버 우회 가능성 존재.' :
+                                    'Filter + RequestWrapper 전역 처리. 서블릿마다 별도 적용 불필요 — 가장 강력.'
+              }`
+          }
+        </div>
+      </div>
+    </div>
+  );
+}
+
+{/* ────────────────────────────────────────────────────────────
+    Component 4: 폼 가드 시뮬레이터 (onbeforeunload + 유효성 검사)
+──────────────────────────────────────────────────────────── */}
+export function FormGuardDemo() {
+  const [title, setTitle] = useState('');
+  const [content, setContent] = useState('');
+  const [isShow, setIsShow] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+  const [log, setLog] = useState([]);
+  let logId = useRef(0);
+
+  const addLog = (msg, color) => {
+    const id = ++logId.current;
+    setLog(prev => [...prev.slice(-5), { id, msg, color }]);
+  };
+
+  const handleInput = (setter) => (e) => {
+    setter(e.target.value);
+    if (!isShow) {
+      setIsShow(true);
+      addLog('입력 감지 → isShow = true, onbeforeunload 활성화', '#f59e0b');
+    }
+  };
+
+  const handleSubmit = () => {
+    if (!title.trim()) { addLog('❌ 유효성 검사 실패: 제목이 비어 있습니다', '#ef4444'); return; }
+    if (!content.trim()) { addLog('❌ 유효성 검사 실패: 내용이 비어 있습니다', '#ef4444'); return; }
+    setIsShow(false);
+    addLog('✅ 유효성 통과 → isShow = false → submit 진행', '#10b981');
+    setSubmitted(true);
+  };
+
+  const handleLeave = () => {
+    if (isShow) {
+      addLog('🚨 이탈 시도 감지! "저장되지 않은 내용이 있습니다." 경고창 표시', '#ef4444');
+    } else {
+      addLog('페이지 이탈 — 경고 없음 (isShow = false)', '#6b7280');
+    }
+  };
+
+  const handleReset = () => {
+    setTitle(''); setContent(''); setIsShow(false); setSubmitted(false); setLog([]);
+    addLog('폼 초기화 — isShow = false', '#6b7280');
+  };
+
+  const wrap = { margin: '32px 0', borderRadius: '18px', overflow: 'hidden', border: '1px solid var(--ifm-color-emphasis-300)', background: 'var(--ifm-background-surface-color)' };
+
+  return (
+    <div style={wrap}>
+      <div style={{ padding: '16px 24px', borderBottom: '1px solid var(--ifm-color-emphasis-200)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+        <div style={{ fontWeight: '700', fontSize: '15px' }}>🛡️ 폼 가드 시뮬레이터</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px' }}>
+          <span style={{ color: 'var(--ifm-color-emphasis-500)' }}>onbeforeunload</span>
+          <span style={{ padding: '3px 12px', borderRadius: '12px', background: isShow ? '#fef3c7' : 'var(--ifm-color-emphasis-100)', color: isShow ? '#92400e' : 'var(--ifm-color-emphasis-500)', fontWeight: '700', fontSize: '11px', border: `1px solid ${isShow ? '#fcd34d' : 'var(--ifm-color-emphasis-200)'}`, transition: 'all 0.3s' }}>
+            {isShow ? '⚠️ 활성화' : '비활성'}
+          </span>
+        </div>
+      </div>
+
+      <div style={{ padding: '20px 24px' }}>
+        {!submitted ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '16px' }}>
+            <div>
+              <div style={{ fontSize: '12px', fontWeight: '700', color: 'var(--ifm-color-emphasis-500)', marginBottom: '6px' }}>제목</div>
+              <input
+                value={title}
+                onChange={handleInput(setTitle)}
+                placeholder="입력하면 onbeforeunload가 활성화됩니다"
+                style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid var(--ifm-color-emphasis-300)', background: 'var(--ifm-background-color)', color: 'var(--ifm-color-content)', fontSize: '13px', boxSizing: 'border-box' }}
+              />
+            </div>
+            <div>
+              <div style={{ fontSize: '12px', fontWeight: '700', color: 'var(--ifm-color-emphasis-500)', marginBottom: '6px' }}>내용</div>
+              <textarea
+                value={content}
+                onChange={handleInput(setContent)}
+                rows={3}
+                placeholder="내용을 입력하세요"
+                style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid var(--ifm-color-emphasis-300)', background: 'var(--ifm-background-color)', color: 'var(--ifm-color-content)', fontSize: '13px', resize: 'vertical', boxSizing: 'border-box' }}
+              />
+            </div>
+          </div>
+        ) : (
+          <div style={{ marginBottom: '16px', padding: '16px', borderRadius: '10px', background: '#f0fdf4', border: '1px solid #86efac', fontSize: '13px', color: '#166534', fontWeight: '600' }}>
+            ✅ 제출 완료! sendRedirect("/boardList2") — 목록으로 이동 (시뮬레이션)
+          </div>
+        )}
+
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '16px' }}>
+          {!submitted && (
+            <button onClick={handleSubmit} style={{ padding: '8px 18px', borderRadius: '8px', border: 'none', background: '#3b82f6', color: '#fff', fontWeight: '700', fontSize: '13px', cursor: 'pointer' }}>
+              ✏️ 저장 (submit)
+            </button>
+          )}
+          <button onClick={handleLeave} style={{ padding: '8px 18px', borderRadius: '8px', border: 'none', background: isShow ? '#ef4444' : 'var(--ifm-color-emphasis-300)', color: isShow ? '#fff' : 'var(--ifm-color-content-secondary)', fontWeight: '700', fontSize: '13px', cursor: 'pointer', transition: 'background 0.2s' }}>
+            🚪 페이지 이탈 시도
+          </button>
+          <button onClick={handleReset} style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--ifm-color-emphasis-300)', background: 'transparent', color: 'var(--ifm-color-content-secondary)', fontSize: '13px', cursor: 'pointer' }}>
+            ↺ 초기화
+          </button>
+        </div>
+
+        {log.length > 0 && (
+          <div style={{ borderRadius: '10px', border: '1px solid var(--ifm-color-emphasis-200)', overflow: 'hidden' }}>
+            <div style={{ padding: '8px 14px', background: 'var(--ifm-color-emphasis-100)', fontSize: '11px', fontWeight: '700', color: 'var(--ifm-color-emphasis-500)' }}>이벤트 로그</div>
+            {log.map(entry => (
+              <div key={entry.id} style={{ padding: '8px 14px', borderTop: '1px solid var(--ifm-color-emphasis-100)', fontSize: '12px', color: entry.color, fontFamily: 'monospace' }}>
+                {entry.msg}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+오늘은 JSP/Servlet 게시판 전체 화면을 완성했다. **MVC 흐름**을 공통 레이아웃(include)으로 묶고, JSTL/EL로 조건 분기와 반복 출력을 구현한 뒤, JS로 **이탈 방지·유효성 검사**, 서버 단에서 **XSS 방어**까지 연결했다.
+
+<!-- truncate -->
+
+## MVC 전체 흐름 — 게시판 시나리오
+
+> 사용자 요청 → 서블릿(컨트롤러) → DAO(DB) → 스코프 저장 → JSP 렌더링. 이 패턴이 리스트/작성/상세/수정/답글 전 시나리오를 관통한다.
+
+컨트롤러는 URL 매핑(예: `boardList2`, `insertBoard2`)으로 분리되며, 역할은 단순하다: **파라미터 수신 → 비즈니스 로직(DAO) 호출 → 결과 전달(forward/redirect)**. JSP는 로직 없이 출력만 담당한다.
+
+```java
+// 상세 보기 — 전형적인 컨트롤러 패턴
+int seq = Integer.parseInt(request.getParameter("seq"));
+BoardDto dto = dao.getDetail(seq);     // DB 조회
+dao.updateViewCnt(seq);                // 조회수 증가
+request.setAttribute("dto", dto);     // Request 스코프 저장
+RequestDispatcher rd = request.getRequestDispatcher("/WEB-INF/views/detailBoard.jsp");
+rd.forward(request, response);
+```
+
+<BoardMvcFlowViz />
+
+---
+
+## 공통 레이아웃: 정적 include + Bootstrap
+
+> JSP 정적 include는 컴파일 시점에 파일을 합치며, taglib 선언을 헤더에 한 번만 두면 모든 include 파일에서 JSTL을 사용할 수 있다.
+
+`header.jsp`에 Bootstrap CSS 링크와 taglib 선언을 한 번 두면, include한 모든 JSP에서 재사용된다.
+
+```jsp
+<%-- header.jsp --%>
+<%@ taglib prefix="c"   uri="http://java.sun.com/jsp/jstl/core" %>
+<%@ taglib prefix="fn"  uri="http://java.sun.com/jsp/jstl/functions" %>
+<%@ taglib prefix="fmt" uri="http://java.sun.com/jsp/jstl/fmt" %>
+<link rel="stylesheet" href="https://cdn.../bootstrap.min.css">
+```
+
+```jsp
+<%-- boardList.jsp — 각 화면에서 include --%>
+<%@ include file="/WEB-INF/views/common/header.jsp" %>
+...본문...
+<%@ include file="/WEB-INF/views/common/footer.jsp" %>
+```
+
+리소스 파일(JS/CSS/이미지)은 반드시 `webapp/js/...` 위치에 두어야 한다. `WEB-INF` 하위에 두면 외부에서 직접 접근이 차단되어 정적 파일로 사용할 수 없다.
+
+| 구분 | JSP 정적 include | React 컴포넌트 |
+|---|---|---|
+| 결합 시점 | 컴파일 시 합쳐짐 | 런타임 렌더링 |
+| 데이터 전달 | request/session/EL로 암묵 공유 | props로 명시 전달 |
+| taglib 전파 | 헤더 선언이 include 파일에 전파됨 | import/props 흐름 추적 필요 |
+
+---
+
+## JSTL/EL 핵심 패턴
+
+### 로그인 상태 분기
+
+세션의 `loginDto` 존재 여부로 메뉴를 조건 렌더링한다.
+
+```jsp
+<c:choose>
+  <c:when test="${loginDto == null}">
+    <%-- 비로그인: 로그인/회원가입 버튼 --%>
+    <button onclick="location.href='./loginServlet2'">로그인</button>
+  </c:when>
+  <c:otherwise>
+    <%-- 로그인: 아이디 출력 + 권한 분기 --%>
+    ${loginDto.id}님
+    <c:if test="${loginDto.role == 'ROLE_ADMIN'}">(관리자)</c:if>
+    <button onclick="location.href='./logoutServlet2'">로그아웃</button>
+  </c:otherwise>
+</c:choose>
+```
+
+### 리스트 출력 — 빈 목록, fn:length, 날짜 포맷
+
+```jsp
+<%-- fn:length로 역번호 계산 --%>
+<c:set var="size" value="${fn:length(list)}" />
+
+<c:choose>
+  <c:when test="${empty list}">
+    <tr><td colspan="5">작성된 글이 없습니다.</td></tr>
+  </c:when>
+  <c:otherwise>
+    <c:forEach var="dto" items="${list}" varStatus="vs">
+      <tr>
+        <td>${size - vs.index}</td>    <%-- 역번호 --%>
+        <td style="padding-left:${dto.depth * 20}px">
+          <c:if test="${dto.depth > 0}"><img src="./img/reply.png" width="16"/></c:if>
+          <c:choose>
+            <c:when test="${dto.delFlag == 'Y'}">관리자에 의해 삭제되었습니다.</c:when>
+            <c:otherwise>
+              <a href="./detailBoard2?seq=${dto.seq}">${dto.title}</a>
+            </c:otherwise>
+          </c:choose>
+        </td>
+        <td>
+          <%-- DB 문자열 날짜를 포맷 변환 --%>
+          <fmt:parseDate value="${dto.regDate}" pattern="yyyy-MM-dd HH:mm:ss" var="parsedDate"/>
+          <fmt:formatDate value="${parsedDate}" pattern="yyyy-MM-dd"/>
+        </td>
+      </tr>
+    </c:forEach>
+  </c:otherwise>
+</c:choose>
+```
+
+depth 들여쓰기와 삭제글 처리를 직접 체험해보자.
+
+<ReplyBoardDemo />
+
+---
+
+## 작성/수정 폼 구성
+
+### hidden input과 param 전달
+
+SEQ는 화면에 표시하지 않고 hidden으로 담아 JS에서 읽어 이동에 사용한다.
+
+```html
+<input type="hidden" name="seq" value="${dto.seq}">
+```
+
+```javascript
+// JS에서 hidden 값을 읽어 URL 구성
+const seq = document.querySelector('input[name="seq"]').value;
+location.href = './modifyBoardForm2?seq=' + seq;
+```
+
+수정 폼으로 이동 시 `param.seq`로 받으며, **파라미터는 다음 페이지까지만**이 핵심이다.
+
+```jsp
+<%-- modifyBoardForm.jsp — param 범위에서 seq 읽기 --%>
+<form action="./modifyBoard2" method="post">
+  <input type="hidden" name="seq" value="${param.seq}">
+  <textarea name="content">${dto.content}</textarea>
+  <button type="submit">수정</button>
+</form>
+```
+
+### history.back, Bootstrap 폼 클래스
+
+```html
+<%-- Bootstrap 3 horizontal form 패턴 --%>
+<div class="form-group">
+  <label class="col-sm-2 control-label">제목</label>
+  <div class="col-sm-10">
+    <input type="text" name="title" class="form-control">
+  </div>
+</div>
+
+<%-- 앵커에도 btn 클래스 적용 가능 --%>
+<a href="javascript:history.back(-1)" class="btn btn-default">취소</a>
+```
+
+---
+
+## XSS 방어
+
+> `<script>` 태그를 그대로 저장하면 상세 페이지에서 브라우저가 실행한다. 입력·출력·서버 3단계 각각의 방어 전략이 있다.
+
+```javascript
+// JS 입력 단계 — 정규표현식 이스케이프
+function escapeXss(str) {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+```
+
+```java
+// 서버 전역 — Filter + RequestWrapper
+public class XssFilter implements Filter {
+  @Override
+  public void doFilter(ServletRequest req, ServletResponse res, FilterChain chain)
+          throws IOException, ServletException {
+    chain.doFilter(new XssRequestWrapper((HttpServletRequest) req), res);
+  }
+}
+
+public class XssRequestWrapper extends HttpServletRequestWrapper {
+  @Override
+  public String getParameter(String name) {
+    String val = super.getParameter(name);
+    return val == null ? null : val.replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+  }
+}
+```
+
+세 가지 방어 방식을 비교해보자.
+
+<XssDefenseDemo />
+
+---
+
+## 폼 가드: 이탈 방지 + 유효성 검사
+
+> `onbeforeunload`는 입력 감지 시 활성화하고, 정상 제출 직전 비활성화한다. 키 차단은 keyCode 기반 이벤트로 구현한다.
+
+```javascript
+let isShow = false;                // 이탈 경고 플래그
+
+// 입력 감지 → 플래그 활성화
+document.querySelector('#title').addEventListener('input', () => {
+  isShow = true;
+});
+
+// 페이지 이탈 경고
+window.onbeforeunload = function() {
+  if (isShow) return '저장되지 않은 내용이 있습니다.';
+};
+
+// 제출 — 플래그 해제 후 전송
+function submitForm() {
+  const title = document.querySelector('#title').value.trim();
+  const content = document.querySelector('#content').value.trim();
+  if (!title) { alert('제목을 입력하세요.'); return; }
+  if (!content) { alert('내용을 입력하세요.'); return; }
+  isShow = false;           // 경고 없이 이탈 허용
+  document.forms[0].submit();
+}
+```
+
+```javascript
+// F5/Ctrl+R/Ctrl+N 차단
+let isCtrl = false;
+
+document.addEventListener('keydown', function(e) {
+  if (e.keyCode === 17) isCtrl = true;          // Ctrl 눌림 추적
+  if (e.keyCode === 116 ||                       // F5
+     (isCtrl && e.keyCode === 82) ||             // Ctrl+R
+     (isCtrl && e.keyCode === 78)) {             // Ctrl+N
+    e.preventDefault();
+    e.stopPropagation();
+    return false;
+  }
+});
+document.addEventListener('keyup', function(e) {
+  if (e.keyCode === 17) isCtrl = false;
+});
+```
+
+<FormGuardDemo />
+
+---
+
+## 정리
+
+오늘 구현한 게시판의 공통 패턴은 다음 하나다.
+
+```
+요청 URL 매핑 (서블릿 doGet/doPost)
+  → request.setCharacterEncoding("UTF-8")
+  → 세션/파라미터 수신
+  → DAO 실행 (SELECT/INSERT/UPDATE)
+  → 성공: setAttribute → forward / sendRedirect
+  → 실패: alert 스크립트 또는 error.jsp forward
+```
+
+| 계층 | 핵심 구현 | 주의점 |
+|---|---|---|
+| 컨트롤러 | URL 매핑, 파라미터 수신, DAO 호출 | 인코딩 설정 항상 첫 번째 |
+| JSTL/EL | `c:if`, `c:forEach`, `fn:length`, `fmt:formatDate` | JSTL 주석 내 코드 실행 주의 |
+| JS | onbeforeunload, keyCode 차단, 유효성 검사 | 브라우저 UI 버튼 새로고침은 완전 차단 불가 |
+| XSS | c:out, 정규표현식, Filter+Wrapper | 수정 화면에도 동일 방어 필요 |
+
+세션 체크, XSS 처리, 인코딩 설정처럼 서블릿마다 반복되는 코드는 모두 **Filter**로 공통화할 수 있다. 지금은 동작 확인이 목적이었고, 이후 리팩토링 대상이다.
