@@ -472,6 +472,101 @@ export function PagingCalculator() {
   );
 }
 
+{/* ────────────────────────────────────────────────────────────
+    Component 5: OFFSET 방식 스캔 낭비 시각화
+──────────────────────────────────────────────────────────── */}
+export function OffsetPerfDemo() {
+  const [offsetVal, setOffsetVal] = useState(50);
+  const PAGE_SIZE = 10;
+
+  const totalScanned = offsetVal + PAGE_SIZE;
+  const wastePercent = offsetVal === 0 ? 0 : Math.round((offsetVal / totalScanned) * 100);
+  const perfLevel = offsetVal < 100 ? 'good' : offsetVal < 1000 ? 'warn' : 'bad';
+  const perfColor = { good: '#10b981', warn: '#f59e0b', bad: '#ef4444' }[perfLevel];
+  const perfLabel = { good: '양호', warn: '주의', bad: '심각' }[perfLevel];
+
+  // 40칸으로 비율 시각화
+  const MAX_BLOCKS = 40;
+  const wasteBlocks = totalScanned <= MAX_BLOCKS
+    ? offsetVal
+    : Math.round((offsetVal / totalScanned) * MAX_BLOCKS);
+  const returnBlocks = MAX_BLOCKS - wasteBlocks;
+
+  const wrap = { margin: '32px 0', borderRadius: '18px', overflow: 'hidden', border: '1px solid var(--ifm-color-emphasis-300)', background: 'var(--ifm-background-surface-color)' };
+
+  return (
+    <div style={wrap}>
+      <div style={{ padding: '16px 24px', borderBottom: '1px solid var(--ifm-color-emphasis-200)', fontWeight: '700', fontSize: '15px' }}>
+        ⚠️ OFFSET 방식 스캔 낭비 시각화
+      </div>
+
+      {/* 슬라이더 */}
+      <div style={{ padding: '20px 24px', borderBottom: '1px solid var(--ifm-color-emphasis-200)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '6px' }}>
+          <span style={{ fontSize: '13px', fontWeight: '700', fontFamily: 'monospace', minWidth: '150px' }}>
+            OFFSET: <span style={{ color: perfColor, fontSize: '16px' }}>{offsetVal.toLocaleString()}</span>
+          </span>
+          <input type="range" min="0" max="10000" step="10" value={offsetVal}
+            onChange={e => setOffsetVal(Number(e.target.value))}
+            style={{ flex: 1, accentColor: perfColor, cursor: 'pointer' }} />
+        </div>
+        <div style={{ fontSize: '11px', color: 'var(--ifm-color-emphasis-400)' }}>
+          슬라이더를 오른쪽으로 움직여보세요 — OFFSET이 커질수록 버려지는 행이 늘어납니다
+        </div>
+      </div>
+
+      {/* 통계 카드 */}
+      <div style={{ padding: '16px 24px', display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', borderBottom: '1px solid var(--ifm-color-emphasis-200)' }}>
+        {[
+          { label: '실제 스캔 행', value: totalScanned.toLocaleString(), color: '#8b5cf6', desc: 'DB가 읽는 총 행 수' },
+          { label: '버려지는 행', value: offsetVal.toLocaleString(), color: '#ef4444', desc: '읽고 즉시 폐기됨' },
+          { label: '낭비율', value: `${wastePercent}%`, color: perfColor, desc: perfLabel },
+        ].map(item => (
+          <div key={item.label} style={{ padding: '12px', borderRadius: '10px', border: `1.5px solid ${item.color}40`, background: `${item.color}08`, textAlign: 'center' }}>
+            <div style={{ fontSize: '10px', fontWeight: '700', color: item.color, marginBottom: '4px' }}>{item.label}</div>
+            <div style={{ fontSize: '22px', fontWeight: '800', color: item.color, fontFamily: 'monospace' }}>{item.value}</div>
+            <div style={{ fontSize: '10px', color: 'var(--ifm-color-emphasis-400)', marginTop: '4px' }}>{item.desc}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* 블록 시각화 */}
+      <div style={{ padding: '16px 24px', borderBottom: '1px solid var(--ifm-color-emphasis-200)' }}>
+        <div style={{ fontSize: '11px', fontWeight: '700', color: 'var(--ifm-color-emphasis-500)', marginBottom: '10px' }}>
+          스캔 비율 시각화 (각 칸 ≈ 전체 스캔의 {Math.round(100 / MAX_BLOCKS)}%)
+        </div>
+        <div style={{ display: 'flex', gap: '3px', flexWrap: 'wrap' }}>
+          {Array.from({ length: wasteBlocks }).map((_, i) => (
+            <div key={`w${i}`} style={{ width: '16px', height: '26px', borderRadius: '3px', background: '#ef444420', border: '1.5px solid #ef4444aa', transition: 'all 0.2s' }} />
+          ))}
+          {Array.from({ length: returnBlocks }).map((_, i) => (
+            <div key={`r${i}`} style={{ width: '16px', height: '26px', borderRadius: '3px', background: '#10b98120', border: '1.5px solid #10b981aa', transition: 'all 0.2s' }} />
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: '20px', marginTop: '10px', fontSize: '11px' }}>
+          <span style={{ color: '#ef4444', fontWeight: '600' }}>■ 스캔 후 버려짐 ({offsetVal.toLocaleString()}행)</span>
+          <span style={{ color: '#10b981', fontWeight: '600' }}>■ 실제 반환 ({PAGE_SIZE}행)</span>
+        </div>
+      </div>
+
+      {/* SQL 표현 */}
+      <div style={{ padding: '16px 24px' }}>
+        <div style={{ fontFamily: 'monospace', fontSize: '12px', padding: '12px 16px', borderRadius: '8px', background: 'var(--ifm-color-emphasis-100)', lineHeight: '1.9' }}>
+          <span style={{ color: '#8b5cf6' }}>SELECT</span> * <span style={{ color: '#8b5cf6' }}>FROM</span> board{' '}
+          <span style={{ color: '#8b5cf6' }}>ORDER BY</span> seq <span style={{ color: '#8b5cf6' }}>DESC</span><br />
+          <span style={{ color: perfColor, fontWeight: '700' }}>OFFSET {offsetVal} ROWS</span>{' '}
+          <span style={{ color: '#10b981', fontWeight: '700' }}>FETCH NEXT {PAGE_SIZE} ROWS ONLY</span>;
+        </div>
+        <div style={{ marginTop: '10px', padding: '10px 14px', borderRadius: '8px', background: `${perfColor}10`, border: `1px solid ${perfColor}40`, fontSize: '12px', color: 'var(--ifm-color-content-secondary)' }}>
+          → DB 내부: 상위 <strong>{totalScanned.toLocaleString()}행</strong> 모두 정렬·스캔
+          → 앞의 <strong style={{ color: '#ef4444' }}>{offsetVal.toLocaleString()}행 폐기</strong>
+          → <strong style={{ color: '#10b981' }}>{PAGE_SIZE}행 반환</strong>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 오늘은 답변형 게시판을 확장해 **관리자 완전 삭제**, **체크박스 다중 삭제**, **SweetAlert2 confirm 흐름**, **서블릿 Filter 접근 제어**, **OFFSET/FETCH 페이징**까지 구현했다. 핵심은 체크박스 상태 동기화, 콜백에서 Promise로 이어지는 비동기 제어, 그리고 페이지네이션 수학 공식이다.
 
 <!-- truncate -->
@@ -720,6 +815,61 @@ ${totalCount - ((currentPage - 1) * pageSize) - vs.index}
 
 <PagingCalculator />
 
+### OFFSET 방식의 한계 — 깊은 페이지의 함정
+
+OFFSET/FETCH는 구현이 단순하지만 **데이터가 많아질수록 성능이 급격히 저하된다**.
+
+DB 엔진은 `OFFSET N`을 처리할 때 N번째 행까지 모두 읽어 메모리에 올린 뒤 버린다. 인덱스가 있어도 `ORDER BY` 결과를 순서대로 세어가야 하므로 **OFFSET이 클수록 읽어야 하는 행이 선형으로 증가**한다.
+
+| 페이지 | OFFSET | 실제 스캔 행 수 | 낭비율 |
+|---|---|---|---|
+| 1페이지 | 0 | 10 | 0% |
+| 100페이지 | 990 | 1,000 | ~99% |
+| 1,000페이지 | 9,990 | 10,000 | ~99.9% |
+
+<OffsetPerfDemo />
+
+---
+
+### 해결 방안 — Keyset Pagination (No-Offset)
+
+마지막으로 받은 행의 PK를 커서(cursor)로 사용해 다음 페이지를 직접 지목하는 방식이다. DB는 인덱스를 타고 해당 지점으로 바로 이동하므로 **어느 페이지든 항상 `pageSize`만큼만 스캔한다**.
+
+```sql
+-- OFFSET 방식 (깊은 페이지일수록 느림)
+SELECT * FROM board ORDER BY seq DESC
+OFFSET 9990 ROWS FETCH NEXT 10 ROWS ONLY;
+-- → 10,000행 스캔 후 9,990행 버림
+
+-- Keyset 방식 (항상 10행만 스캔)
+SELECT * FROM board
+WHERE seq < #{lastSeq}   -- 이전 페이지의 마지막 seq 값
+ORDER BY seq DESC
+FETCH FIRST 10 ROWS ONLY;
+-- → seq 인덱스로 바로 이동 → 10행만 읽음
+```
+
+**커버링 인덱스 서브쿼리** — OFFSET 방식을 유지하면서 I/O 비용을 줄이는 절충안이다. 서브쿼리에서 PK만 인덱스로 빠르게 추출한 뒤, 조인으로 실제 데이터를 가져온다.
+
+```sql
+SELECT b.* FROM board b
+INNER JOIN (
+    SELECT seq FROM board ORDER BY seq DESC
+    OFFSET 9990 ROWS FETCH NEXT 10 ROWS ONLY
+) t ON b.seq = t.seq
+ORDER BY b.seq DESC;
+-- 서브쿼리: 인덱스만 읽어 seq 목록 추출 (전체 컬럼 I/O 없음)
+-- 조인: 해당 seq 행만 랜덤 접근
+```
+
+| 방식 | 스캔량 | 임의 페이지 이동 | 구현 난이도 |
+|---|---|---|---|
+| **OFFSET** | O(offset + pageSize) | 가능 | 쉬움 |
+| **Keyset (No-Offset)** | O(pageSize) | 불가 — 이전/다음만 | 보통 |
+| **커버링 인덱스** | O(offset + pageSize), I/O 절감 | 가능 | 보통 |
+
+> **선택 기준** — 게시판처럼 순차 탐색이 주이고 데이터가 수십만 건 이상이면 Keyset을 우선 검토한다. 관리자 페이지처럼 임의 페이지 점프가 필요하다면 커버링 인덱스 방식이 현실적인 절충안이다. 정렬 기준 컬럼(`seq`)에는 반드시 인덱스가 있어야 한다.
+
 ---
 
 ## 정리
@@ -732,5 +882,6 @@ ${totalCount - ((currentPage - 1) * pageSize) - vs.index}
 | SweetAlert2 | `Swal.fire().then(result => result.isConfirmed)` |
 | Filter | `getServletPath()` → 예외 URL 제외 → 세션 검사 → forward |
 | 페이징 | 두 쿼리(OFFSET/COUNT), startPage/endPage/offset 공식 |
+| OFFSET 한계 | 깊은 페이지 → 전체 스캔 후 폐기 → Keyset / 커버링 인덱스로 개선 |
 
 Filter 도입 후 서블릿 내 중복 세션 체크 코드를 제거할 수 있고, Spring Security로 전환하면 이 전략이 `SecurityFilterChain` 설정 한 블록으로 압축된다.

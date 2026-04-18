@@ -1,0 +1,488 @@
+---
+title: "Spring의 큰 그림 — 서블릿 한계부터 IoC/DI·AOP·Bean까지"
+date: 2026-04-18
+authors: HyungJun
+tags: [Java, Spring]
+---
+
+import { useState, useEffect, useRef } from 'react';
+
+{/* ────────────────────────────────────────────────────────────
+    Component 1: 서블릿 vs 프론트컨트롤러 요청 흐름 시각화
+──────────────────────────────────────────────────────────── */}
+export function RequestFlowViz() {
+  const [mode, setMode] = useState('servlet');
+  const [step, setStep] = useState(-1);
+  const [running, setRunning] = useState(false);
+  const timerRef = useRef(null);
+
+  const servletSteps = [
+    { label: '요청 도착', desc: 'HTTP 요청이 웹 서버에 들어옵니다.', color: '#6366f1' },
+    { label: '서블릿 매핑 탐색', desc: 'web.xml 또는 @WebServlet 으로 URL → 서블릿 클래스를 직접 찾습니다.', color: '#f59e0b' },
+    { label: 'UserServlet 실행', desc: '요청별 서블릿이 request 파싱 + 형 변환 + 비즈니스 로직을 모두 처리합니다.', color: '#ef4444' },
+    { label: '뷰 경로 직접 조합', desc: '"/WEB-INF/views/" + viewName + ".jsp" 를 수동으로 포워드합니다.', color: '#ec4899' },
+    { label: '응답 반환', desc: '처리 완료. 그런데 기능이 100개면 서블릿 클래스도 100개...', color: '#94a3b8' },
+  ];
+
+  const springSteps = [
+    { label: '요청 도착', desc: 'HTTP 요청이 웹 서버에 들어옵니다.', color: '#6366f1' },
+    { label: 'DispatcherServlet (단일 진입점)', desc: '모든 요청이 단 하나의 프론트 컨트롤러에서 수신됩니다.', color: '#3b82f6' },
+    { label: 'HandlerMapping → 핸들러 탐색', desc: '@RequestMapping 기반으로 어떤 컨트롤러 메서드를 실행할지 결정합니다.', color: '#10b981' },
+    { label: 'HandlerAdapter → 컨트롤러 실행', desc: '파라미터 바인딩·형 변환을 자동 처리한 뒤 메서드를 호출합니다.', color: '#f59e0b' },
+    { label: 'ViewResolver → 뷰 선택', desc: '뷰 이름("home")만 반환하면 prefix/suffix를 자동으로 조합합니다.', color: '#8b5cf6' },
+    { label: '응답 반환', desc: '컨트롤러는 비즈니스 로직에만 집중. 공통 처리는 프레임워크가 담당합니다.', color: '#14b8a6' },
+  ];
+
+  const steps = mode === 'servlet' ? servletSteps : springSteps;
+
+  const start = () => {
+    clearInterval(timerRef.current);
+    setStep(0);
+    setRunning(true);
+    let i = 0;
+    timerRef.current = setInterval(() => {
+      i++;
+      if (i >= steps.length) { clearInterval(timerRef.current); setRunning(false); setStep(steps.length - 1); return; }
+      setStep(i);
+    }, 900);
+  };
+
+  const reset = () => { clearInterval(timerRef.current); setStep(-1); setRunning(false); };
+
+  useEffect(() => () => clearInterval(timerRef.current), []);
+  useEffect(() => { reset(); }, [mode]);
+
+  const wrap = { margin: '32px 0', borderRadius: '18px', overflow: 'hidden', border: '1px solid var(--ifm-color-emphasis-300)', background: 'var(--ifm-background-surface-color)' };
+  const header = { padding: '16px 24px', borderBottom: '1px solid var(--ifm-color-emphasis-200)' };
+  const body = { padding: '24px' };
+  const btnBase = { padding: '7px 18px', border: 'none', borderRadius: '8px', fontWeight: '700', fontSize: '13px', cursor: 'pointer', transition: 'all 0.2s' };
+
+  return (
+    <div style={wrap}>
+      <div style={header}>
+        <div style={{ fontWeight: '700', fontSize: '15px', marginBottom: '12px' }}>🔄 요청 처리 흐름 비교</div>
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          {['servlet', 'spring'].map(m => (
+            <button key={m} onClick={() => setMode(m)} style={{ ...btnBase, background: mode === m ? (m === 'servlet' ? '#ef4444' : '#3b82f6') : 'var(--ifm-color-emphasis-200)', color: mode === m ? '#fff' : 'var(--ifm-color-content-secondary)' }}>
+              {m === 'servlet' ? '서블릿 기반' : 'Spring MVC'}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div style={body}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '20px' }}>
+          {steps.map((s, i) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 16px', borderRadius: '10px', border: `1px solid ${step >= i ? s.color + '44' : 'var(--ifm-color-emphasis-200)'}`, background: step >= i ? s.color + '11' : 'transparent', transition: 'all 0.4s', opacity: step >= i ? 1 : 0.4 }}>
+              <div style={{ width: '28px', height: '28px', borderRadius: '50%', background: step >= i ? s.color : 'var(--ifm-color-emphasis-300)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: '700', fontSize: '12px', flexShrink: 0, transition: 'background 0.4s' }}>{i + 1}</div>
+              <div>
+                <div style={{ fontWeight: '700', fontSize: '13px', color: step >= i ? s.color : 'var(--ifm-color-content-secondary)' }}>{s.label}</div>
+                {step >= i && <div style={{ fontSize: '12px', color: 'var(--ifm-color-content-secondary)', marginTop: '2px' }}>{s.desc}</div>}
+              </div>
+            </div>
+          ))}
+        </div>
+        {mode === 'servlet' && step === steps.length - 1 && (
+          <div style={{ padding: '12px 16px', borderRadius: '10px', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)', fontSize: '13px', color: '#ef4444', fontWeight: '600' }}>
+            ⚠️ 기능 10개 → 서블릿 10개, 100개 → 100개. 규모가 커질수록 유지보수 지옥.
+          </div>
+        )}
+        {mode === 'spring' && step === steps.length - 1 && (
+          <div style={{ padding: '12px 16px', borderRadius: '10px', background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.3)', fontSize: '13px', color: '#3b82f6', fontWeight: '600' }}>
+            ✅ 진입점 하나, 공통 처리 자동화. 컨트롤러는 비즈니스 로직만 담당합니다.
+          </div>
+        )}
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <button onClick={start} disabled={running} style={{ ...btnBase, background: running ? 'var(--ifm-color-emphasis-300)' : '#3b82f6', color: '#fff', opacity: running ? 0.6 : 1 }}>▶ 실행</button>
+          <button onClick={reset} style={{ ...btnBase, background: 'var(--ifm-color-emphasis-200)', color: 'var(--ifm-color-content)' }}>↺ 초기화</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+{/* ────────────────────────────────────────────────────────────
+    Component 2: Spring Framework vs Spring Boot 비교 탭
+──────────────────────────────────────────────────────────── */}
+export function SpringVsBootCompare() {
+  const ITEMS = [
+    {
+      key: '설정 방식',
+      framework: { title: 'XML / Java Config 수동 설정', desc: 'web.xml, applicationContext.xml, @Configuration 클래스를 직접 작성해야 합니다.', code: '<!-- web.xml -->\n<servlet>\n  <servlet-name>dispatcher</servlet-name>\n  <servlet-class>DispatcherServlet</servlet-class>\n</servlet>' },
+      boot: { title: '자동 설정 (Auto Configuration)', desc: '@EnableAutoConfiguration이 클래스패스를 스캔해 필요한 빈을 자동 등록합니다.', code: '# application.properties 한 줄로 DB 연결\nspring.datasource.url=jdbc:mysql://...\nspring.datasource.username=root' },
+    },
+    {
+      key: '의존성 버전',
+      framework: { title: '개발자가 직접 맞춰야 함', desc: 'Spring 버전 + 각 라이브러리 버전 호환성을 직접 확인하고 pom.xml에 명시해야 합니다.', code: '<dependency>\n  <groupId>org.springframework</groupId>\n  <artifactId>spring-webmvc</artifactId>\n  <version>6.1.0</version>  <!-- 직접 명시 -->\n</dependency>' },
+      boot: { title: 'BOM으로 자동 관리', desc: '스프링 부트 버전만 맞추면 의존성 라이브러리 버전이 자동으로 결정됩니다.', code: '<!-- 버전 생략 가능 — Boot BOM이 관리 -->\n<dependency>\n  <groupId>org.springframework.boot</groupId>\n  <artifactId>spring-boot-starter-web</artifactId>\n</dependency>' },
+    },
+    {
+      key: '실행 환경',
+      framework: { title: '외부 WAS (Tomcat) 배포', desc: 'war 파일로 패키징 후 별도 설치된 Tomcat에 배포하는 흐름이 일반적입니다.', code: '# 외부 Tomcat에 war 배포\ncp target/myapp.war $TOMCAT_HOME/webapps/' },
+      boot: { title: '내장 Tomcat — jar 실행', desc: 'Tomcat이 내장되어 있어 jar 파일 하나를 java -jar로 바로 실행할 수 있습니다.', code: '# 빌드 후 즉시 실행\njava -jar target/myapp.jar' },
+    },
+    {
+      key: '프로젝트 시작',
+      framework: { title: '설정 시간이 큼', desc: '초기 구성(빈 설정, MVC 설정, 보안, DB 연결)을 처음부터 직접 작성해야 합니다.', code: '# 최소 설정만 해도:\n# web.xml, dispatcher-servlet.xml,\n# applicationContext.xml, pom.xml\n# → 수십 줄 설정 선행 필요' },
+      boot: { title: 'Spring Initializr로 즉시 생성', desc: 'start.spring.io 또는 IDE에서 체크박스로 의존성 선택, 압축 해제 후 바로 실행 가능합니다.', code: '# 생성 즉시 실행 가능한 Hello World\n@SpringBootApplication\npublic class App {\n  public static void main(String[] args) {\n    SpringApplication.run(App.class, args);\n  }\n}' },
+    },
+  ];
+
+  const [activeIdx, setActiveIdx] = useState(0);
+  const item = ITEMS[activeIdx];
+
+  const wrap = { margin: '32px 0', borderRadius: '18px', overflow: 'hidden', border: '1px solid var(--ifm-color-emphasis-300)', background: 'var(--ifm-background-surface-color)' };
+  const tabBar = { display: 'flex', borderBottom: '1px solid var(--ifm-color-emphasis-200)', overflowX: 'auto' };
+  const colBase = { flex: '1 1 240px', padding: '20px', borderRadius: '12px' };
+  const codeBox = { fontFamily: 'monospace', fontSize: '11px', padding: '12px', borderRadius: '8px', whiteSpace: 'pre', overflowX: 'auto', marginTop: '10px' };
+
+  return (
+    <div style={wrap}>
+      <div style={{ padding: '16px 24px 0', borderBottom: '1px solid var(--ifm-color-emphasis-200)' }}>
+        <div style={{ fontWeight: '700', fontSize: '15px', marginBottom: '12px' }}>⚖️ Spring Framework vs Spring Boot</div>
+        <div style={tabBar}>
+          {ITEMS.map((it, i) => (
+            <button key={i} onClick={() => setActiveIdx(i)} style={{ padding: '8px 16px', border: 'none', borderRadius: '8px 8px 0 0', fontWeight: '700', fontSize: '13px', cursor: 'pointer', background: activeIdx === i ? '#3b82f6' : 'transparent', color: activeIdx === i ? '#fff' : 'var(--ifm-color-content-secondary)', whiteSpace: 'nowrap', transition: 'all 0.2s' }}>
+              {it.key}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div style={{ padding: '24px', display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
+        <div style={{ ...colBase, background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.2)' }}>
+          <div style={{ fontWeight: '700', color: '#ef4444', marginBottom: '6px', fontSize: '13px' }}>Spring Framework</div>
+          <div style={{ fontWeight: '600', fontSize: '14px', marginBottom: '8px' }}>{item.framework.title}</div>
+          <div style={{ fontSize: '13px', color: 'var(--ifm-color-content-secondary)', lineHeight: '1.6' }}>{item.framework.desc}</div>
+          <div style={{ ...codeBox, background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.2)', color: 'var(--ifm-color-content)' }}>{item.framework.code}</div>
+        </div>
+        <div style={{ ...colBase, background: 'rgba(59,130,246,0.06)', border: '1px solid rgba(59,130,246,0.2)' }}>
+          <div style={{ fontWeight: '700', color: '#3b82f6', marginBottom: '6px', fontSize: '13px' }}>Spring Boot</div>
+          <div style={{ fontWeight: '600', fontSize: '14px', marginBottom: '8px' }}>{item.boot.title}</div>
+          <div style={{ fontSize: '13px', color: 'var(--ifm-color-content-secondary)', lineHeight: '1.6' }}>{item.boot.desc}</div>
+          <div style={{ ...codeBox, background: 'rgba(59,130,246,0.06)', border: '1px solid rgba(59,130,246,0.2)', color: 'var(--ifm-color-content)' }}>{item.boot.code}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+{/* ────────────────────────────────────────────────────────────
+    Component 3: Spring 핵심 3축 (IoC/DI, AOP, MVC) 클릭 설명
+──────────────────────────────────────────────────────────── */}
+export function SpringCorePillars() {
+  const PILLARS = [
+    {
+      id: 'ioc',
+      icon: '📦',
+      name: 'IoC / DI',
+      subtitle: '제어의 역전 / 의존성 주입',
+      color: '#3b82f6',
+      summary: '객체 생성과 조립을 개발자가 아닌 컨테이너가 담당합니다.',
+      details: [
+        { q: 'IoC란?', a: 'Inversion of Control — 객체의 생성/생명주기를 개발자가 아닌 스프링 컨테이너(ApplicationContext)가 관리합니다. "new 없이 사용한다"는 감각이 핵심입니다.' },
+        { q: 'DI란?', a: '컨테이너가 만든 빈(Bean)을 필요한 곳에 자동으로 주입(Inject)합니다. @Autowired, @Resource, 생성자 주입 방식으로 주입받습니다.' },
+        { q: '왜 좋은가?', a: '결합도(Coupling)가 낮아져 테스트·교체·확장이 쉬워집니다. 인터페이스 기반 설계를 자연스럽게 강제해 SOLID 원칙 준수를 돕습니다.' },
+      ],
+      code: '// 컨테이너가 생성 → 주입\n@Service\npublic class OrderService {\n  private final PaymentClient client;\n\n  // 생성자 주입 권장\n  public OrderService(PaymentClient client) {\n    this.client = client;\n  }\n}',
+    },
+    {
+      id: 'aop',
+      icon: '🔀',
+      name: 'AOP',
+      subtitle: '관점 지향 프로그래밍',
+      color: '#10b981',
+      summary: '로그·트랜잭션·예외처리 같은 공통 기능을 핵심 로직에서 분리합니다.',
+      details: [
+        { q: 'Core vs Cross-cutting', a: '주 관심사(Core): CRUD, 비즈니스 로직, 쿼리 실행. 관점 외 관심사(Cross-cutting): 로그, 트랜잭션(@Transactional), 예외 처리, 권한 검사.' },
+        { q: '어떻게 동작하나?', a: '포인트컷(어디서)과 어드바이스(무엇을)를 정의하면, 런타임에 프록시 객체가 끼어들어 공통 코드를 자동 실행합니다.' },
+        { q: '실무 활용', a: '@Transactional 하나로 트랜잭션 관리가 자동화되는 것이 대표적인 AOP 적용 예시입니다. 로그 어노테이션, 실행 시간 측정도 자주 씁니다.' },
+      ],
+      code: '// 포인트컷: Service 전 메서드에 적용\n@Aspect @Component\npublic class LogAspect {\n  @Before("execution(* com..service.*.*(..))")\n  public void logBefore(JoinPoint jp) {\n    log.info("호출: {}", jp.getSignature());\n  }\n}',
+    },
+    {
+      id: 'mvc',
+      icon: '🌐',
+      name: 'Spring MVC',
+      subtitle: '웹 계층 처리',
+      color: '#8b5cf6',
+      summary: 'DispatcherServlet 중심으로 요청을 수신~응답까지 일관되게 처리합니다.',
+      details: [
+        { q: 'DispatcherServlet', a: '모든 HTTP 요청의 단일 진입점. HandlerMapping→HandlerAdapter→ViewResolver로 이어지는 파이프라인을 조율합니다.' },
+        { q: '레이어 구조', a: 'Controller(요청 수신·응답) → Service(비즈니스 로직) → Repository(DB 연동). 각 레이어는 단일 책임을 갖습니다.' },
+        { q: 'REST API', a: '@RestController = @Controller + @ResponseBody. 메서드 반환값이 JSON으로 직렬화되어 응답 바디에 담깁니다.' },
+      ],
+      code: '@RestController\n@RequestMapping("/api/orders")\npublic class OrderController {\n  private final OrderService orderService;\n\n  @GetMapping("/{id}")\n  public ApiResponse<OrderDto> getOrder(@PathVariable Long id) {\n    return ApiResponse.ok(orderService.findById(id));\n  }\n}',
+    },
+  ];
+
+  const [selected, setSelected] = useState('ioc');
+  const pillar = PILLARS.find(p => p.id === selected);
+
+  const wrap = { margin: '32px 0', borderRadius: '18px', overflow: 'hidden', border: '1px solid var(--ifm-color-emphasis-300)', background: 'var(--ifm-background-surface-color)' };
+  const codeBox = { fontFamily: 'monospace', fontSize: '11px', padding: '14px', borderRadius: '8px', whiteSpace: 'pre', overflowX: 'auto', background: 'var(--ifm-color-emphasis-100)', marginTop: '16px' };
+
+  return (
+    <div style={wrap}>
+      <div style={{ padding: '16px 24px', borderBottom: '1px solid var(--ifm-color-emphasis-200)' }}>
+        <div style={{ fontWeight: '700', fontSize: '15px' }}>🏛️ Spring 핵심 3축</div>
+      </div>
+      <div style={{ display: 'flex', gap: '0', borderBottom: '1px solid var(--ifm-color-emphasis-200)' }}>
+        {PILLARS.map(p => (
+          <button key={p.id} onClick={() => setSelected(p.id)} style={{ flex: 1, padding: '16px 12px', border: 'none', borderBottom: selected === p.id ? `3px solid ${p.color}` : '3px solid transparent', background: selected === p.id ? p.color + '11' : 'transparent', cursor: 'pointer', transition: 'all 0.2s' }}>
+            <div style={{ fontSize: '22px', marginBottom: '4px' }}>{p.icon}</div>
+            <div style={{ fontWeight: '700', fontSize: '13px', color: selected === p.id ? p.color : 'var(--ifm-color-content)' }}>{p.name}</div>
+            <div style={{ fontSize: '11px', color: 'var(--ifm-color-content-secondary)' }}>{p.subtitle}</div>
+          </button>
+        ))}
+      </div>
+      <div style={{ padding: '24px' }}>
+        <div style={{ padding: '12px 16px', borderRadius: '10px', background: pillar.color + '11', border: `1px solid ${pillar.color}33`, marginBottom: '20px', fontWeight: '600', fontSize: '14px', color: pillar.color }}>{pillar.summary}</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          {pillar.details.map((d, i) => (
+            <div key={i} style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
+              <div style={{ minWidth: '8px', height: '8px', borderRadius: '50%', background: pillar.color, marginTop: '6px', flexShrink: 0 }} />
+              <div>
+                <span style={{ fontWeight: '700', fontSize: '13px', color: pillar.color }}>{d.q} </span>
+                <span style={{ fontSize: '13px', color: 'var(--ifm-color-content-secondary)', lineHeight: '1.6' }}>{d.a}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div style={codeBox}>{pillar.code}</div>
+      </div>
+    </div>
+  );
+}
+
+{/* ────────────────────────────────────────────────────────────
+    Component 4: 빈 등록 방식 (@Component vs @Configuration+@Bean)
+──────────────────────────────────────────────────────────── */}
+export function BeanRegistrationCompare() {
+  const [active, setActive] = useState(0);
+
+  const WAYS = [
+    {
+      name: '@Component 계열',
+      color: '#f59e0b',
+      icon: '🏷️',
+      when: '단순 싱글턴 빈 등록 — 클래스 단위로 빈 하나를 등록할 때',
+      pros: ['클래스에 어노테이션만 붙이면 컴포넌트 스캔이 자동 등록', '@Controller, @Service, @Repository가 모두 @Component의 특화 버전', '역할(레이어)이 명확해지는 부가 효과'],
+      cons: ['같은 타입을 여러 인스턴스로 나눠 등록하기 어려움', '외부 라이브러리 클래스에는 붙일 수 없음'],
+      code: '@Component          // 범용\n@Controller         // 웹 계층\n@Service            // 비즈니스 계층\n@Repository         // 데이터 접근 계층\npublic class SamsungTv implements Tv { ... }\n\n// 빈 이름: samsungTv (클래스명 → camelCase)',
+      scope: '클래스 단위',
+    },
+    {
+      name: '@Configuration + @Bean',
+      color: '#8b5cf6',
+      icon: '⚙️',
+      when: '메서드 단위 등록 — 같은 타입을 여러 이름으로 나누거나, 외부 라이브러리를 빈으로 등록할 때',
+      pros: ['메서드 이름이 곧 빈 이름 — 같은 타입 여러 인스턴스 구분 가능', '외부 라이브러리(third-party) 클래스도 빈으로 등록 가능', 'DataSource, RestTemplate 같은 인프라 빈 구성에 적합'],
+      cons: ['코드량이 @Component보다 많아짐', '설정 클래스가 늘어나면 관리 포인트 증가'],
+      code: '@Configuration\npublic class AcConfig {\n\n  @Bean(name = "acOn")\n  public AirConditioner acOn() {\n    return new AirConditioner(true);\n  }\n\n  @Bean(name = "acOff")\n  public AirConditioner acOff() {\n    return new AirConditioner(false);\n  }\n}',
+      scope: '메서드 반환 객체 단위',
+    },
+  ];
+
+  const w = WAYS[active];
+
+  const wrap = { margin: '32px 0', borderRadius: '18px', overflow: 'hidden', border: '1px solid var(--ifm-color-emphasis-300)', background: 'var(--ifm-background-surface-color)' };
+  const codeBox = { fontFamily: 'monospace', fontSize: '11px', padding: '14px', borderRadius: '8px', whiteSpace: 'pre', overflowX: 'auto', background: 'var(--ifm-color-emphasis-100)', marginTop: '12px' };
+  const chip = (text, color) => ({ display: 'inline-block', padding: '2px 8px', borderRadius: '99px', fontSize: '11px', fontWeight: '700', background: color + '20', color: color, marginRight: '6px', marginBottom: '4px' });
+
+  return (
+    <div style={wrap}>
+      <div style={{ padding: '16px 24px', borderBottom: '1px solid var(--ifm-color-emphasis-200)' }}>
+        <div style={{ fontWeight: '700', fontSize: '15px', marginBottom: '12px' }}>🫘 빈 등록 방식 비교</div>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          {WAYS.map((way, i) => (
+            <button key={i} onClick={() => setActive(i)} style={{ padding: '8px 16px', border: 'none', borderRadius: '8px', fontWeight: '700', fontSize: '13px', cursor: 'pointer', background: active === i ? way.color : 'var(--ifm-color-emphasis-200)', color: active === i ? '#fff' : 'var(--ifm-color-content-secondary)', transition: 'all 0.2s' }}>
+              {way.icon} {way.name}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div style={{ padding: '24px' }}>
+        <div style={{ fontWeight: '700', fontSize: '13px', color: w.color, marginBottom: '4px' }}>언제 쓰나?</div>
+        <div style={{ fontSize: '13px', color: 'var(--ifm-color-content-secondary)', marginBottom: '16px', lineHeight: '1.6' }}>{w.when}</div>
+
+        <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', marginBottom: '16px' }}>
+          <div style={{ flex: '1 1 180px' }}>
+            <div style={{ fontWeight: '700', fontSize: '13px', color: '#10b981', marginBottom: '8px' }}>✅ 장점</div>
+            {w.pros.map((p, i) => <div key={i} style={{ fontSize: '12px', color: 'var(--ifm-color-content-secondary)', marginBottom: '6px', lineHeight: '1.5' }}>• {p}</div>)}
+          </div>
+          <div style={{ flex: '1 1 180px' }}>
+            <div style={{ fontWeight: '700', fontSize: '13px', color: '#ef4444', marginBottom: '8px' }}>⚠️ 주의</div>
+            {w.cons.map((c, i) => <div key={i} style={{ fontSize: '12px', color: 'var(--ifm-color-content-secondary)', marginBottom: '6px', lineHeight: '1.5' }}>• {c}</div>)}
+          </div>
+        </div>
+
+        <div style={{ marginBottom: '8px' }}>
+          <span style={chip('등록 단위', w.color)}>등록 단위: {w.scope}</span>
+        </div>
+        <div style={codeBox}>{w.code}</div>
+      </div>
+    </div>
+  );
+}
+
+---
+
+서블릿만으로 웹을 만들면 기능이 10개면 서블릿 클래스도 10개, 100개면 100개가 생깁니다. 스프링은 이 구조적 한계를 해결하기 위해 탄생했고, 스프링 부트는 그 스프링을 더 빠르게 쓰기 위한 제품입니다. 이번 글에서는 서블릿 한계 → 프론트 컨트롤러 → 스프링 → 스프링 부트로 이어지는 흐름을 전체 그림으로 정리합니다. Bean 상세 등록법과 DI 주입 방식은 다음 글에서 다룹니다.
+
+<!-- truncate -->
+
+## 서블릿 기반 개발의 구조적 한계
+
+초기 Java 웹 개발은 서블릿(Servlet) 클래스가 요청마다 1:1 대응하는 구조였습니다. 기능 수가 늘어날수록 클래스 수가 선형으로 증가하고, 공통 처리(형 변환, 뷰 이동, 예외 처리)가 모든 클래스에 반복되었습니다.
+
+| 문제 | 구체적 부담 |
+|---|---|
+| 클래스 폭증 | 기능 N개 → 서블릿 클래스 N개 |
+| 형 변환 반복 | 모든 파라미터가 `String`, 매번 수동 변환 |
+| 뷰 경로 조합 | `"/WEB-INF/views/" + name + ".jsp"` 반복 |
+| 공통 처리 분산 | 로그·인증 코드가 모든 서블릿에 흩어짐 |
+
+이를 해결한 것이 **프론트 컨트롤러 패턴** — 단일 진입점이 모든 요청을 받아 "어디로 보낼지"를 결정하는 구조입니다. 스프링 MVC의 `DispatcherServlet`이 바로 이 역할입니다.
+
+<RequestFlowViz />
+
+---
+
+## Spring Framework vs Spring Boot
+
+스프링 프레임워크가 먼저 등장해 IoC/DI·AOP·MVC 구조를 제공했고, 스프링 부트는 이를 **더 빠르게 쓰기 위한 제품**으로 나중에 추가되었습니다. 별개의 기술이 아니라 같은 생태계 안에 있습니다.
+
+<SpringVsBootCompare />
+
+> **실무 관점:** "스프링 부트 버전만 알면 된다"는 말은 부트가 의존성 라이브러리의 호환 버전 집합(BOM)을 관리하기 때문입니다. `pom.xml`에서 그룹·아티팩트만 선언해도 버전이 따라옵니다. `mvn help:effective-pom`으로 최종 해석된 버전을 확인할 수 있습니다.
+
+---
+
+## Spring의 핵심 3축
+
+스프링이 제공하는 기능은 수십 가지지만, **IoC/DI · AOP · MVC** 세 축이 나머지 모든 기능의 기반이 됩니다. 각각 클릭해서 확인해보세요.
+
+<SpringCorePillars />
+
+### 왜 이 3축인가?
+
+- **IoC/DI** → 결합도를 낮추고 테스트·교체가 쉬워집니다.
+- **AOP** → 공통 관심사를 분리해 핵심 로직이 순수해집니다.
+- **MVC** → 요청~응답 파이프라인을 표준화해 레이어 책임이 명확해집니다.
+
+세 가지가 함께 동작할 때 "SOLID 원칙을 자연스럽게 따르는 구조"가 됩니다.
+
+---
+
+## 빈(Bean)이란?
+
+스프링 컨테이너가 **생성·관리하는 객체**를 빈이라고 합니다. `new`로 직접 만든 객체는 스프링이 모르므로 DI·AOP가 적용되지 않습니다.
+
+```
+일반 객체: new SamsungTv()  → 스프링이 모름, 주입·관리 불가
+빈 객체: @Component SamsungTv → 컨테이너가 생성, 주입·관리 가능
+```
+
+### 빈 등록 방식 2가지
+
+<BeanRegistrationCompare />
+
+### `@ComponentScan` 동작 원리
+
+`@SpringBootApplication` 내부에는 `@ComponentScan`이 포함되어 있으며, **메인 클래스가 위치한 패키지와 그 하위 패키지**만 스캔합니다.
+
+```
+com.example.myapp
+├── MyAppApplication.java  ← @SpringBootApplication (베이스 패키지)
+├── user/
+│   ├── UserController.java    ✅ 스캔됨
+│   └── UserService.java       ✅ 스캔됨
+└── util/
+    └── DateUtils.java         ✅ 스캔됨
+
+com.external.helper
+└── HelperBean.java            ❌ 베이스 패키지 밖 → 스캔 안 됨
+```
+
+베이스 패키지 밖에 빈을 두면 주입 시 `NoSuchBeanDefinitionException`이 발생합니다. 가장 흔한 초기 오류 중 하나입니다.
+
+---
+
+## Spring 프로젝트 구조 한눈에
+
+```
+src/main/java/com/example/
+├── MyAppApplication.java          ← @SpringBootApplication
+├── user/
+│   ├── UserController.java        ← @RestController
+│   ├── UserService.java           ← @Service
+│   └── UserRepository.java        ← @Repository (JPA/MyBatis)
+└── config/
+    └── AppConfig.java             ← @Configuration + @Bean
+
+src/main/resources/
+├── application.properties         ← 자동 설정 조정
+├── static/                        ← CSS / JS / 이미지
+└── templates/                     ← Thymeleaf 등 템플릿
+```
+
+| 파일/폴더 | 역할 |
+|---|---|
+| `application.properties` | 포트, DB, 뷰 리졸버 등 환경 설정 |
+| `static/` | 정적 리소스 (빌드 없이 바로 서빙) |
+| `templates/` | 서버사이드 렌더링 뷰 |
+| `mvnw` | Maven Wrapper — 별도 Maven 설치 없이 빌드 |
+
+---
+
+## AOP 맛보기 — 공통 관심사 분리
+
+```java
+// Before AOP: 모든 서비스 메서드에 로그 코드가 흩어짐
+public OrderDto createOrder(...) {
+  log.info("createOrder 호출");  // 반복
+  // 비즈니스 로직
+  log.info("createOrder 완료");  // 반복
+}
+
+// After AOP: 어드바이스 하나로 일괄 처리
+@Aspect @Component
+public class LogAspect {
+  @Around("execution(* com.example..*Service.*(..))")
+  public Object logAround(ProceedingJoinPoint pjp) throws Throwable {
+    log.info("호출: {}", pjp.getSignature());
+    Object result = pjp.proceed();
+    log.info("완료: {}", pjp.getSignature());
+    return result;
+  }
+}
+```
+
+- **포인트컷**: "어디에 적용할지" — `execution(* com.example..*Service.*(..))`
+- **어드바이스**: "무엇을 할지" — `@Around`, `@Before`, `@After` 등
+- **어스펙트**: 포인트컷 + 어드바이스의 조합
+
+`@Transactional`이 자동으로 트랜잭션을 열고 닫는 것도 AOP로 구현되어 있습니다.
+
+---
+
+## 정리 — Spring의 큰 그림
+
+```
+요청 → DispatcherServlet (프론트 컨트롤러)
+           ↓ HandlerMapping → 컨트롤러 탐색
+           ↓ HandlerAdapter → 파라미터 바인딩 + 컨트롤러 실행
+           ↓ AOP 프록시 → 트랜잭션·로그 등 자동 처리
+           ↓ IoC 컨테이너 → 빈 주입(DI)
+           ↓ ViewResolver → 뷰 이름 → 실제 뷰 경로 조합
+응답 ← 렌더링 결과 반환
+```
+
+| 개념 | 핵심 한 줄 |
+|---|---|
+| IoC / DI | 객체 생성·주입을 컨테이너에 위임한다 |
+| AOP | 공통 관심사를 핵심 로직에서 분리한다 |
+| Spring MVC | 단일 진입점(DispatcherServlet)으로 요청을 파이프라인으로 처리한다 |
+| Bean | 컨테이너가 관리하는 객체 — `@Component` 또는 `@Bean`으로 등록 |
+| Spring Boot | 자동 설정 + 스타터 + 내장 서버로 스프링 구성 부담을 줄인다 |
+
+다음 글에서는 `@SpringBootApplication` 내부 구성, DI 주입 방식 3가지(`@Autowired` / `@Qualifier` / 생성자 주입) 실습을 상세히 다룹니다.
