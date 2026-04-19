@@ -1,0 +1,701 @@
+---
+title: "Spring DI 주입 방식 4가지 — 생성자·필드·Setter·메서드 주입 완전 정복"
+date: 2026-04-19
+authors: HyungJun
+tags: [Java, Spring]
+---
+
+import { useState, useEffect, useRef } from 'react';
+
+{/* ────────────────────────────────────────────────────────────
+    Component 1: DI 4가지 방식 코드 탭 비교
+──────────────────────────────────────────────────────────── */}
+export function DIMethodCompare() {
+  const [active, setActive] = useState(0);
+
+  const METHODS = [
+    {
+      name: '생성자 주입',
+      emoji: '🏗️',
+      color: '#3b82f6',
+      badge: '★ 권장',
+      when: '의존 객체가 반드시 필요한 경우 — 실무 기본값',
+      code: `@Service
+public class OrderService {
+
+  // final 선언 → 불변 보장
+  private final PaymentClient paymentClient;
+  private final NotifyService notifyService;
+
+  // 스프링이 자동으로 호출하는 생성자
+  // @Autowired 생략 가능 (생성자가 1개일 때)
+  public OrderService(PaymentClient paymentClient,
+                      NotifyService notifyService) {
+    this.paymentClient = paymentClient;
+    this.notifyService = notifyService;
+  }
+}
+
+// ────────────────────────────────────────
+// Lombok @RequiredArgsConstructor로 단축 가능
+@Service
+@RequiredArgsConstructor          // final 필드 생성자 자동 생성
+public class OrderService {
+  private final PaymentClient paymentClient;
+  private final NotifyService notifyService;
+  // 생성자 코드 없어도 동일하게 동작
+}`,
+      pros: [
+        'final 키워드로 불변성(immutability) 보장',
+        '컨테이너 없이 순수 Java 테스트에서 직접 주입 가능',
+        '순환 의존성(A→B→A)을 애플리케이션 시작 시점에 감지',
+        '@RequiredArgsConstructor로 보일러플레이트 제거 가능',
+      ],
+      cons: [
+        '의존성이 많아지면 생성자 파라미터가 길어질 수 있음 (리팩토링 신호)',
+      ],
+    },
+    {
+      name: '필드 주입',
+      emoji: '📌',
+      color: '#ef4444',
+      badge: '비권장',
+      when: '간단한 테스트 코드 또는 설정 클래스 내부에서 최소한으로',
+      code: `@Service
+public class OrderService {
+
+  @Autowired                      // 필드에 직접 주입
+  private PaymentClient paymentClient;
+
+  @Autowired
+  private NotifyService notifyService;
+
+  // final 선언 불가 — 주입 시점이 생성 이후이기 때문
+}
+
+// ────────────────────────────────────────
+// IDE (IntelliJ) 경고 메시지
+// "Field injection is not recommended"
+// → 테스트·유지보수 문제로 스프링 팀도 비권장`,
+      pros: [
+        '코드가 가장 짧고 작성이 빠름',
+        '의존성 개수가 많아도 코드 길이 변화 없음',
+      ],
+      cons: [
+        'final 불가 → 런타임 중 임의로 바꿀 수 있어 불안정',
+        'new OrderService() 로 생성하면 의존성이 null → 단위 테스트 어려움',
+        'IntelliJ에서 경고 표시',
+        '순환 의존성 탐지가 런타임으로 미뤄짐 (Spring Boot 2.6+ 기본 차단)',
+      ],
+    },
+    {
+      name: 'Setter 주입',
+      emoji: '🔧',
+      color: '#f59e0b',
+      badge: '선택적 의존성',
+      when: '의존 객체가 선택적(optional)이거나 나중에 교체할 가능성이 있을 때',
+      code: `@Service
+public class OrderService {
+
+  private PaymentClient paymentClient;  // final 아님
+
+  @Autowired
+  public void setPaymentClient(PaymentClient paymentClient) {
+    this.paymentClient = paymentClient;
+  }
+}
+
+// ────────────────────────────────────────
+// 선택적 의존성 처리 — 빈이 없어도 기동 가능
+@Autowired(required = false)
+public void setNotifyService(NotifyService notifyService) {
+  this.notifyService = notifyService;
+  // 빈이 없으면 이 메서드가 호출되지 않음 → null 유지
+}`,
+      pros: [
+        '의존 객체가 없어도 애플리케이션 기동 가능 (required=false 조합)',
+        '이미 생성된 객체의 의존성을 나중에 교체할 수 있음',
+        '레거시 스프링 XML 설정에서 자주 사용되던 방식',
+      ],
+      cons: [
+        'final 불가 → 불변 보장 안 됨',
+        '주입 시점이 생성자 이후이므로 생성 직후 메서드 호출 시 NPE 가능',
+        '세터가 public이라 외부에서 의존성 교체 가능 → 설계 불안정',
+      ],
+    },
+    {
+      name: '메서드 주입',
+      emoji: '⚡',
+      color: '#8b5cf6',
+      badge: '다중 주입',
+      when: '한 메서드에서 여러 빈을 한 번에 초기화해야 할 때',
+      code: `@Service
+public class OrderService {
+
+  private PaymentClient paymentClient;
+  private NotifyService notifyService;
+
+  // 일반 메서드에 @Autowired
+  // Setter가 아닌 초기화 메서드로 활용
+  @Autowired
+  public void init(PaymentClient paymentClient,
+                   NotifyService notifyService) {
+    this.paymentClient = paymentClient;
+    this.notifyService = notifyService;
+  }
+}
+
+// ────────────────────────────────────────
+// Setter 주입의 확장형
+// 파라미터를 여러 개 받을 수 있다는 점이 유일한 차이
+// 실무에서는 거의 쓰이지 않음`,
+      pros: [
+        'Setter 주입과 달리 여러 빈을 파라미터로 한 번에 받을 수 있음',
+        '초기화 로직과 의존성 주입을 한 메서드에 묶을 수 있음',
+      ],
+      cons: [
+        'final 불가',
+        'Setter 주입과 단점이 동일 (불변 보장 없음, 외부 노출 가능)',
+        '실무에서 거의 사용되지 않음 — 생성자 주입으로 대체 가능',
+      ],
+    },
+  ];
+
+  const m = METHODS[active];
+  const wrap = { margin: '32px 0', borderRadius: '18px', overflow: 'hidden', border: '1px solid var(--ifm-color-emphasis-300)', background: 'var(--ifm-background-surface-color)' };
+  const codeBox = { fontFamily: 'monospace', fontSize: '11px', padding: '14px', borderRadius: '8px', whiteSpace: 'pre', overflowX: 'auto', background: 'var(--ifm-color-emphasis-100)', marginTop: '0' };
+
+  return (
+    <div style={wrap}>
+      <div style={{ padding: '16px 24px 0', borderBottom: '1px solid var(--ifm-color-emphasis-200)' }}>
+        <div style={{ fontWeight: '700', fontSize: '15px', marginBottom: '12px' }}>💉 DI 주입 방식 4가지</div>
+        <div style={{ display: 'flex', gap: '4px', overflowX: 'auto' }}>
+          {METHODS.map((mt, i) => (
+            <button key={i} onClick={() => setActive(i)} style={{ padding: '8px 14px', border: 'none', borderRadius: '8px 8px 0 0', fontWeight: '700', fontSize: '12px', cursor: 'pointer', background: active === i ? mt.color : 'var(--ifm-color-emphasis-200)', color: active === i ? '#fff' : 'var(--ifm-color-content-secondary)', whiteSpace: 'nowrap', transition: 'all 0.2s' }}>
+              {mt.emoji} {mt.name}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div style={{ padding: '24px' }}>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap' }}>
+          <span style={{ display: 'inline-block', padding: '4px 12px', borderRadius: '99px', fontSize: '12px', fontWeight: '700', background: m.color + '20', color: m.color }}>{m.badge}</span>
+          <span style={{ fontSize: '13px', color: 'var(--ifm-color-content-secondary)' }}>{m.when}</span>
+        </div>
+
+        <div style={codeBox}>{m.code}</div>
+
+        <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', marginTop: '16px' }}>
+          <div style={{ flex: '1 1 180px' }}>
+            <div style={{ fontWeight: '700', fontSize: '12px', color: '#10b981', marginBottom: '8px' }}>✅ 장점</div>
+            {m.pros.map((p, i) => (
+              <div key={i} style={{ display: 'flex', gap: '6px', alignItems: 'flex-start', marginBottom: '6px' }}>
+                <div style={{ minWidth: '6px', height: '6px', borderRadius: '50%', background: '#10b981', marginTop: '5px', flexShrink: 0 }} />
+                <div style={{ fontSize: '12px', color: 'var(--ifm-color-content-secondary)', lineHeight: '1.5' }}>{p}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ flex: '1 1 180px' }}>
+            <div style={{ fontWeight: '700', fontSize: '12px', color: '#ef4444', marginBottom: '8px' }}>⚠️ 단점 / 주의</div>
+            {m.cons.map((c, i) => (
+              <div key={i} style={{ display: 'flex', gap: '6px', alignItems: 'flex-start', marginBottom: '6px' }}>
+                <div style={{ minWidth: '6px', height: '6px', borderRadius: '50%', background: '#ef4444', marginTop: '5px', flexShrink: 0 }} />
+                <div style={{ fontSize: '12px', color: 'var(--ifm-color-content-secondary)', lineHeight: '1.5' }}>{c}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+{/* ────────────────────────────────────────────────────────────
+    Component 2: 생성자 주입이 권장되는 이유 시각화 (3가지 비교)
+──────────────────────────────────────────────────────────── */}
+export function ConstructorInjectionWhy() {
+  const [activeReason, setActiveReason] = useState(0);
+
+  const REASONS = [
+    {
+      title: '불변성 (Immutability)',
+      icon: '🔒',
+      color: '#3b82f6',
+      desc: '생성자 주입은 final 필드와 함께 쓸 수 있어 주입 이후 의존성을 바꿀 수 없습니다.',
+      compare: [
+        {
+          label: '생성자 주입 — final 보장',
+          code: `@Service
+public class OrderService {
+  private final PaymentClient client; // final
+
+  public OrderService(PaymentClient client) {
+    this.client = client;
+  }
+  // 이후 client를 교체할 방법이 없음 → 안전
+}`,
+          ok: true,
+        },
+        {
+          label: '필드 주입 — final 불가',
+          code: `@Service
+public class OrderService {
+  @Autowired
+  private PaymentClient client; // final 선언 불가
+
+  // 리플렉션으로 런타임 중 교체 가능
+  // → 상태가 불안정할 위험
+}`,
+          ok: false,
+        },
+      ],
+    },
+    {
+      title: '테스트 용이성',
+      icon: '🧪',
+      color: '#10b981',
+      desc: '생성자 주입은 스프링 컨테이너 없이 순수 Java로 단위 테스트를 작성할 수 있습니다.',
+      compare: [
+        {
+          label: '생성자 주입 — 컨테이너 없이 테스트 가능',
+          code: `// @SpringBootTest 없어도 됨
+class OrderServiceTest {
+  @Test
+  void createOrder_success() {
+    // Mock 객체를 생성자로 직접 전달
+    PaymentClient mockClient = Mockito.mock(PaymentClient.class);
+    OrderService service = new OrderService(mockClient);
+
+    // 스프링 없이 순수 단위 테스트
+    assertThat(service.createOrder(req)).isNotNull();
+  }
+}`,
+          ok: true,
+        },
+        {
+          label: '필드 주입 — 컨테이너 없으면 null',
+          code: `class OrderServiceTest {
+  @Test
+  void createOrder_success() {
+    OrderService service = new OrderService();
+    // service.paymentClient == null
+    // → 호출 즉시 NullPointerException!
+
+    // @SpringBootTest 또는 리플렉션으로
+    // 강제 주입해야 함 → 테스트 복잡도 증가
+  }
+}`,
+          ok: false,
+        },
+      ],
+    },
+    {
+      title: '순환 의존성 조기 감지',
+      icon: '🔄',
+      color: '#f59e0b',
+      desc: 'A가 B를 주입받고, B가 A를 주입받는 순환 의존성을 시작 시점에 감지합니다.',
+      compare: [
+        {
+          label: '생성자 주입 — 시작 즉시 감지',
+          code: `// A → B → A 순환 의존성
+@Service
+public class ServiceA {
+  public ServiceA(ServiceB b) { ... }
+}
+@Service
+public class ServiceB {
+  public ServiceB(ServiceA a) { ... }
+}
+
+// 결과: 애플리케이션 시작 시 즉시 오류
+// BeanCurrentlyInCreationException
+// → 런타임 오류 전에 반드시 수정하게 됨`,
+          ok: true,
+        },
+        {
+          label: '필드 주입 — 런타임까지 숨겨짐',
+          code: `@Service
+public class ServiceA {
+  @Autowired ServiceB b;
+}
+@Service
+public class ServiceB {
+  @Autowired ServiceA a;
+}
+
+// Spring Boot 2.6+ 기본: 순환 의존성 차단
+// 이전 버전: 시작은 성공하지만
+// 실제 호출 시점에 StackOverflowError 발생
+// → 오류 발견이 늦어짐`,
+          ok: false,
+        },
+      ],
+    },
+  ];
+
+  const r = REASONS[activeReason];
+  const wrap = { margin: '32px 0', borderRadius: '18px', overflow: 'hidden', border: '1px solid var(--ifm-color-emphasis-300)', background: 'var(--ifm-background-surface-color)' };
+  const codeBox = { fontFamily: 'monospace', fontSize: '11px', padding: '12px', borderRadius: '8px', whiteSpace: 'pre', overflowX: 'auto', background: 'var(--ifm-color-emphasis-100)', marginTop: '8px' };
+
+  return (
+    <div style={wrap}>
+      <div style={{ padding: '16px 24px', borderBottom: '1px solid var(--ifm-color-emphasis-200)' }}>
+        <div style={{ fontWeight: '700', fontSize: '15px', marginBottom: '12px' }}>🏗️ 생성자 주입이 권장되는 이유</div>
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          {REASONS.map((rs, i) => (
+            <button key={i} onClick={() => setActiveReason(i)} style={{ padding: '8px 14px', border: 'none', borderRadius: '8px', fontWeight: '700', fontSize: '12px', cursor: 'pointer', background: activeReason === i ? rs.color : 'var(--ifm-color-emphasis-200)', color: activeReason === i ? '#fff' : 'var(--ifm-color-content-secondary)', transition: 'all 0.2s' }}>
+              {rs.icon} {rs.title}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div style={{ padding: '24px' }}>
+        <div style={{ padding: '12px 16px', borderRadius: '10px', background: r.color + '0d', border: `1px solid ${r.color}33`, marginBottom: '20px', fontSize: '13px', color: 'var(--ifm-color-content-secondary)', lineHeight: '1.6' }}>{r.desc}</div>
+        <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
+          {r.compare.map((c, i) => (
+            <div key={i} style={{ flex: '1 1 240px', padding: '14px', borderRadius: '10px', border: `1px solid ${c.ok ? 'rgba(16,185,129,0.3)' : 'rgba(239,68,68,0.3)'}`, background: c.ok ? 'rgba(16,185,129,0.05)' : 'rgba(239,68,68,0.05)' }}>
+              <div style={{ fontWeight: '700', fontSize: '12px', color: c.ok ? '#10b981' : '#ef4444', marginBottom: '8px' }}>
+                {c.ok ? '✅' : '❌'} {c.label}
+              </div>
+              <div style={codeBox}>{c.code}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+{/* ────────────────────────────────────────────────────────────
+    Component 3: 주입 방식 결정 가이드
+──────────────────────────────────────────────────────────── */}
+export function InjectionDecisionGuide() {
+  const [answers, setAnswers] = useState({});
+  const [result, setResult] = useState(null);
+
+  const QUESTIONS = [
+    { id: 'required', text: '의존 객체가 반드시 필요한가요?', yes: '필수', no: '선택적' },
+    { id: 'multiple', text: '같은 타입 빈이 여러 개인가요?', yes: '다중 빈', no: '단일 빈' },
+    { id: 'change', text: '생성 이후에도 의존성을 교체해야 하나요?', yes: '가변', no: '불변' },
+  ];
+
+  const RESULTS = {
+    '필수-단일 빈-불변': { method: '생성자 주입', color: '#3b82f6', icon: '🏗️', note: '가장 일반적인 케이스. @RequiredArgsConstructor로 깔끔하게.' },
+    '필수-다중 빈-불변': { method: '생성자 주입 + @Qualifier', color: '#3b82f6', icon: '🏗️', note: '파라미터에 @Qualifier("name")를 붙여 특정 빈을 주입.' },
+    '필수-단일 빈-가변': { method: 'Setter 주입', color: '#f59e0b', icon: '🔧', note: '가변이 정말 필요한지 재검토 권장. 설계 냄새일 수 있음.' },
+    '필수-다중 빈-가변': { method: 'Setter 주입 + @Qualifier', color: '#f59e0b', icon: '🔧', note: '가변+다중 조합. 설계를 다시 검토하는 것이 좋습니다.' },
+    '선택적-단일 빈-불변': { method: 'Setter 주입 (required=false)', color: '#f59e0b', icon: '🔧', note: '@Autowired(required=false) 세터로 빈이 없어도 기동.' },
+    '선택적-다중 빈-불변': { method: 'Setter 주입 + @Qualifier (required=false)', color: '#f59e0b', icon: '🔧', note: '빈이 없을 때 null 유지. 방어 로직 필요.' },
+    '선택적-단일 빈-가변': { method: 'Setter 주입 (required=false)', color: '#f59e0b', icon: '🔧', note: '선택적이고 가변. 가장 유연하지만 가장 불안정한 조합.' },
+    '선택적-다중 빈-가변': { method: 'Setter 주입 + @Qualifier (required=false)', color: '#f59e0b', icon: '🔧', note: '복잡도가 높습니다. 인터페이스 분리나 Optional 고려를 권장.' },
+  };
+
+  const toggle = (id, val) => {
+    const next = { ...answers, [id]: val };
+    setAnswers(next);
+    if (Object.keys(next).length === QUESTIONS.length) {
+      const key = `${next.required}-${next.multiple}-${next.change}`;
+      setResult(RESULTS[key] || null);
+    } else {
+      setResult(null);
+    }
+  };
+
+  const reset = () => { setAnswers({}); setResult(null); };
+  const wrap = { margin: '32px 0', borderRadius: '18px', overflow: 'hidden', border: '1px solid var(--ifm-color-emphasis-300)', background: 'var(--ifm-background-surface-color)' };
+
+  return (
+    <div style={wrap}>
+      <div style={{ padding: '16px 24px', borderBottom: '1px solid var(--ifm-color-emphasis-200)' }}>
+        <div style={{ fontWeight: '700', fontSize: '15px', marginBottom: '4px' }}>🗺️ 어떤 주입 방식을 써야 할까?</div>
+        <div style={{ fontSize: '12px', color: 'var(--ifm-color-content-secondary)' }}>질문에 답하면 적합한 주입 방식을 추천합니다</div>
+      </div>
+      <div style={{ padding: '24px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginBottom: '20px' }}>
+          {QUESTIONS.map((q) => (
+            <div key={q.id} style={{ padding: '14px 16px', borderRadius: '10px', background: 'var(--ifm-color-emphasis-100)', border: answers[q.id] ? '1px solid var(--ifm-color-primary)' : '1px solid transparent' }}>
+              <div style={{ fontSize: '13px', fontWeight: '600', marginBottom: '10px', color: 'var(--ifm-color-content)' }}>{q.text}</div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                {[q.yes, q.no].map((opt) => (
+                  <button key={opt} onClick={() => toggle(q.id, opt)} style={{ padding: '6px 16px', border: 'none', borderRadius: '6px', fontWeight: '700', fontSize: '12px', cursor: 'pointer', background: answers[q.id] === opt ? '#3b82f6' : 'var(--ifm-background-surface-color)', color: answers[q.id] === opt ? '#fff' : 'var(--ifm-color-content-secondary)', border: `1px solid ${answers[q.id] === opt ? '#3b82f6' : 'var(--ifm-color-emphasis-200)'}`, transition: 'all 0.2s' }}>
+                    {opt}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {result ? (
+          <div style={{ padding: '20px', borderRadius: '12px', background: result.color + '0d', border: `2px solid ${result.color}44` }}>
+            <div style={{ fontSize: '24px', marginBottom: '8px' }}>{result.icon}</div>
+            <div style={{ fontWeight: '800', fontSize: '16px', color: result.color, marginBottom: '8px' }}>추천: {result.method}</div>
+            <div style={{ fontSize: '13px', color: 'var(--ifm-color-content-secondary)', lineHeight: '1.6' }}>{result.note}</div>
+          </div>
+        ) : (
+          <div style={{ padding: '16px', borderRadius: '10px', background: 'var(--ifm-color-emphasis-100)', textAlign: 'center', fontSize: '13px', color: 'var(--ifm-color-content-secondary)' }}>
+            모든 질문에 답하면 추천 방식이 나타납니다
+          </div>
+        )}
+
+        {Object.keys(answers).length > 0 && (
+          <button onClick={reset} style={{ marginTop: '12px', padding: '7px 16px', border: 'none', borderRadius: '8px', fontWeight: '700', fontSize: '12px', cursor: 'pointer', background: 'var(--ifm-color-emphasis-200)', color: 'var(--ifm-color-content)' }}>↺ 다시 선택</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+{/* ────────────────────────────────────────────────────────────
+    Component 4: 주입 방식 우선순위 랭킹
+──────────────────────────────────────────────────────────── */}
+export function InjectionRankViz() {
+  const RANKS = [
+    {
+      rank: 1,
+      method: '생성자 주입',
+      icon: '🏗️',
+      color: '#3b82f6',
+      tags: ['final 가능', '불변 보장', '테스트 용이', '순환 의존성 조기 감지'],
+      verdict: '실무 기본값. 특별한 이유가 없으면 항상 이 방식.',
+      freq: 95,
+    },
+    {
+      rank: 2,
+      method: 'Setter 주입',
+      icon: '🔧',
+      color: '#f59e0b',
+      tags: ['선택적 의존성', 'required=false', '레거시'],
+      verdict: '의존 객체가 선택적일 때만. 가변성을 최소화해야 함.',
+      freq: 4,
+    },
+    {
+      rank: 3,
+      method: '메서드 주입',
+      icon: '⚡',
+      color: '#8b5cf6',
+      tags: ['다중 파라미터', 'Setter 변형'],
+      verdict: 'Setter 주입의 확장. 실무에서는 거의 사용 안 함.',
+      freq: 1,
+    },
+    {
+      rank: 4,
+      method: '필드 주입',
+      icon: '📌',
+      color: '#ef4444',
+      tags: ['@Autowired 필드', 'IDE 경고', '비권장'],
+      verdict: '프로덕션 코드에서는 사용하지 않음. 간단한 테스트용 설정 클래스에서만.',
+      freq: 0,
+    },
+  ];
+
+  const wrap = { margin: '32px 0', borderRadius: '18px', overflow: 'hidden', border: '1px solid var(--ifm-color-emphasis-300)', background: 'var(--ifm-background-surface-color)' };
+
+  return (
+    <div style={wrap}>
+      <div style={{ padding: '16px 24px', borderBottom: '1px solid var(--ifm-color-emphasis-200)' }}>
+        <div style={{ fontWeight: '700', fontSize: '15px' }}>🏆 실무 권장 순위</div>
+      </div>
+      <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        {RANKS.map((r) => (
+          <div key={r.rank} style={{ display: 'flex', gap: '14px', alignItems: 'flex-start', padding: '16px', borderRadius: '12px', border: `1px solid ${r.color}33`, background: r.color + '08' }}>
+            <div style={{ width: '36px', height: '36px', borderRadius: '10px', background: r.rank === 1 ? r.color : r.color + '30', color: r.rank === 1 ? '#fff' : r.color, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: '800', fontSize: '16px', flexShrink: 0 }}>
+              {r.rank === 1 ? '★' : r.rank}
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '16px' }}>{r.icon}</span>
+                <span style={{ fontWeight: '700', fontSize: '14px', color: r.color }}>{r.method}</span>
+                {r.tags.map((t, i) => (
+                  <span key={i} style={{ padding: '2px 8px', borderRadius: '99px', fontSize: '10px', fontWeight: '700', background: r.color + '20', color: r.color }}>{t}</span>
+                ))}
+              </div>
+              <div style={{ fontSize: '12px', color: 'var(--ifm-color-content-secondary)', marginBottom: '8px', lineHeight: '1.5' }}>{r.verdict}</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <div style={{ flex: 1, height: '6px', borderRadius: '99px', background: 'var(--ifm-color-emphasis-200)', overflow: 'hidden' }}>
+                  <div style={{ width: `${r.freq}%`, height: '100%', background: r.color, borderRadius: '99px', transition: 'width 0.8s' }} />
+                </div>
+                <span style={{ fontSize: '11px', fontWeight: '700', color: r.color, minWidth: '30px' }}>{r.freq}%</span>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+---
+
+`@Autowired`는 어디에 붙이느냐에 따라 동작 방식이 달라집니다. 필드에 붙이면 필드 주입, 생성자에 붙이면 생성자 주입, 세터에 붙이면 세터 주입입니다. 기능은 비슷해 보이지만 불변성·테스트성·오류 감지 시점에서 큰 차이가 있습니다.
+
+<!-- truncate -->
+
+## 주입 방식 4가지 한눈에
+
+스프링은 `@Autowired`가 붙은 위치를 보고 빈을 주입합니다.
+
+```
+위치            방식
+──────────────────────────────────────
+필드 위        → 필드 주입 (Field Injection)
+생성자 위      → 생성자 주입 (Constructor Injection)
+세터 메서드 위 → Setter 주입 (Setter Injection)
+일반 메서드 위 → 메서드 주입 (Method Injection)
+```
+
+탭으로 각 방식의 코드와 장단점을 비교해보세요.
+
+<DIMethodCompare />
+
+---
+
+## 생성자 주입이 권장되는 3가지 이유
+
+스프링 공식 문서와 IntelliJ 모두 생성자 주입을 권장합니다. 단순히 "관례"가 아니라 구조적인 이유가 있습니다.
+
+<ConstructorInjectionWhy />
+
+### @RequiredArgsConstructor로 보일러플레이트 없애기
+
+생성자 주입의 유일한 단점인 "생성자 코드가 길어짐"은 Lombok으로 해결합니다.
+
+```java
+// Before — 생성자 직접 작성
+@Service
+public class OrderService {
+  private final PaymentClient paymentClient;
+  private final NotifyService notifyService;
+  private final OrderRepository orderRepository;
+
+  public OrderService(PaymentClient paymentClient,
+                      NotifyService notifyService,
+                      OrderRepository orderRepository) {
+    this.paymentClient = paymentClient;
+    this.notifyService = notifyService;
+    this.orderRepository = orderRepository;
+  }
+}
+
+// After — @RequiredArgsConstructor
+@Service
+@RequiredArgsConstructor    // final 필드 생성자 자동 생성
+public class OrderService {
+  private final PaymentClient paymentClient;
+  private final NotifyService notifyService;
+  private final OrderRepository orderRepository;
+  // 동일하게 동작, 코드 절반 이상 감소
+}
+```
+
+---
+
+## Setter 주입 — 선택적 의존성 처리
+
+의존 객체가 없어도 애플리케이션이 동작해야 하는 경우에 사용합니다.
+
+```java
+@Service
+public class ReportService {
+
+  private NotifyService notifyService;   // 선택적 의존성
+
+  // 빈이 있으면 주입, 없으면 이 메서드 자체가 호출되지 않음
+  @Autowired(required = false)
+  public void setNotifyService(NotifyService notifyService) {
+    this.notifyService = notifyService;
+  }
+
+  public void generateReport() {
+    // 방어 로직 필요
+    if (notifyService != null) {
+      notifyService.sendAlert("보고서 생성 완료");
+    }
+  }
+}
+```
+
+> **언제 쓰나?** 플러그인 구조처럼 특정 모듈이 없어도 기본 동작은 해야 하는 경우. 레거시 시스템에서 특정 빈이 조건부로만 존재하는 경우.
+
+---
+
+## 메서드 주입 — Setter 주입의 확장
+
+세터가 아닌 일반 메서드에 `@Autowired`를 붙여 여러 빈을 한 번에 주입받습니다.
+
+```java
+@Service
+public class DashboardService {
+
+  private MetricClient metricClient;
+  private CacheClient cacheClient;
+  private AlertService alertService;
+
+  // 세터가 아닌 일반 메서드
+  @Autowired
+  public void setup(MetricClient metricClient,
+                    CacheClient cacheClient,
+                    AlertService alertService) {
+    this.metricClient = metricClient;
+    this.cacheClient = cacheClient;
+    this.alertService = alertService;
+  }
+}
+```
+
+Setter 주입과 실질적으로 동일하며 파라미터를 여러 개 받을 수 있다는 차이만 있습니다. 생성자 주입으로 대체할 수 있어 실무에서는 거의 사용하지 않습니다.
+
+---
+
+## 어떤 방식을 선택해야 할까?
+
+<InjectionDecisionGuide />
+
+<InjectionRankViz />
+
+---
+
+## 주입 시 다중 빈 문제 — 빠른 복습
+
+주입 방식과 무관하게, 같은 타입 빈이 2개 이상이면 추가 처리가 필요합니다.
+
+```java
+// 두 빈 등록
+@Bean("acOn")  AirConditioner acOn()  { return new AirConditioner(true); }
+@Bean("acOff") AirConditioner acOff() { return new AirConditioner(false); }
+
+// ── 생성자 주입 + @Qualifier ──
+public RoomService(@Qualifier("acOn") AirConditioner ac) { ... }
+
+// ── 필드 주입 + @Qualifier (비권장) ──
+@Autowired @Qualifier("acOn")
+private AirConditioner ac;
+
+// ── @Resource (이름 우선 탐색) ──
+@Resource(name = "acOn")
+private AirConditioner ac;
+```
+
+---
+
+## 전체 정리
+
+```
+DI 주입 방식 4가지
+├── 생성자 주입 ★★★★★  — final 불변 보장, 테스트 용이, 순환 의존성 조기 감지
+├── Setter 주입 ★★☆☆☆  — 선택적 의존성 처리, required=false 조합
+├── 메서드 주입 ★☆☆☆☆  — Setter의 확장형, 거의 사용 안 함
+└── 필드 주입  ☆☆☆☆☆  — 프로덕션 비권장, IDE 경고, 테스트 어려움
+
+결론:
+├── 필수 의존성  → 생성자 주입 (@RequiredArgsConstructor로 간소화)
+└── 선택적 의존성 → Setter 주입 (@Autowired(required=false))
+```
+
+| 비교 항목 | 생성자 | Setter | 메서드 | 필드 |
+|---|:---:|:---:|:---:|:---:|
+| final 가능 | ✅ | ❌ | ❌ | ❌ |
+| 순환 의존성 조기 감지 | ✅ | ❌ | ❌ | ❌ |
+| 컨테이너 없이 테스트 | ✅ | 어려움 | 어려움 | ❌ |
+| 선택적 의존성 처리 | ❌ | ✅ | ✅ | ✅ |
+| 실무 권장 | ★★★★★ | ★★☆☆☆ | ★☆☆☆☆ | ☆☆☆☆☆ |
