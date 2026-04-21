@@ -1,0 +1,479 @@
+---
+title: "Spring AOP, MyBatis, JSP, Thymeleaf 핵심 정리"
+date: 2026-04-21
+authors: HyungJun
+tags: [Spring, Java, 기본기]
+---
+
+import { useState, useEffect, useRef } from 'react';
+
+export function AOPFlowViz() {
+  const [mode, setMode] = useState('normal');
+  const [step, setStep] = useState(-1);
+  const [running, setRunning] = useState(false);
+  const timerRef = useRef(null);
+
+  const normalSteps = [
+    { id: 'around-start', label: '@Around 시작', color: '#8b5cf6', desc: 'ProceedingJoinPoint.proceed() 호출 전' },
+    { id: 'before',       label: '@Before',       color: '#3b82f6', desc: '타깃 메서드 실행 직전' },
+    { id: 'target',       label: '타깃 메서드',   color: '#10b981', desc: '실제 비즈니스 로직 실행' },
+    { id: 'after',        label: '@After',         color: '#f59e0b', desc: '정상/예외 무관하게 항상 실행' },
+    { id: 'returning',    label: '@AfterReturning',color: '#06b6d4', desc: '정상 반환 시에만 실행' },
+    { id: 'around-end',   label: '@Around 종료',  color: '#8b5cf6', desc: 'proceed() 반환값 처리 후' },
+  ];
+
+  const exceptionSteps = [
+    { id: 'around-start', label: '@Around 시작',   color: '#8b5cf6', desc: 'ProceedingJoinPoint.proceed() 호출 전' },
+    { id: 'before',       label: '@Before',         color: '#3b82f6', desc: '타깃 메서드 실행 직전' },
+    { id: 'target-ex',    label: '타깃 메서드 (예외)', color: '#ef4444', desc: '예외 발생!' },
+    { id: 'after',        label: '@After',           color: '#f59e0b', desc: '예외 시에도 반드시 실행' },
+    { id: 'throwing',     label: '@AfterThrowing',   color: '#f97316', desc: '예외 발생 시에만 실행' },
+    { id: 'around-ex',    label: '@Around 예외처리', color: '#8b5cf6', desc: 'catch 블록에서 예외 처리' },
+  ];
+
+  const steps = mode === 'normal' ? normalSteps : exceptionSteps;
+
+  const start = () => {
+    if (running) return;
+    setStep(-1);
+    setRunning(true);
+    let i = 0;
+    const run = () => {
+      setStep(i);
+      i++;
+      if (i < steps.length) {
+        timerRef.current = setTimeout(run, 700);
+      } else {
+        setRunning(false);
+      }
+    };
+    timerRef.current = setTimeout(run, 300);
+  };
+
+  const reset = () => {
+    clearTimeout(timerRef.current);
+    setStep(-1);
+    setRunning(false);
+  };
+
+  useEffect(() => () => clearTimeout(timerRef.current), []);
+
+  const btnStyle = (active) => ({
+    padding: '6px 16px',
+    borderRadius: 6,
+    border: '1px solid var(--ifm-color-primary)',
+    background: active ? 'var(--ifm-color-primary)' : 'transparent',
+    color: active ? '#fff' : 'var(--ifm-color-primary)',
+    cursor: 'pointer',
+    fontWeight: 600,
+    fontSize: 13,
+  });
+
+  return (
+    <div style={{ border: '1px solid var(--ifm-color-emphasis-300)', borderRadius: 10, padding: 20, marginBottom: 24 }}>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+        <span style={{ fontSize: 13, fontWeight: 700, marginRight: 4 }}>실행 케이스:</span>
+        <button style={btnStyle(mode === 'normal')} onClick={() => { setMode('normal'); reset(); }}>정상 반환</button>
+        <button style={btnStyle(mode === 'exception')} onClick={() => { setMode('exception'); reset(); }}>예외 발생</button>
+        <div style={{ flex: 1 }} />
+        <button
+          style={{ padding: '6px 18px', borderRadius: 6, background: running ? '#6b7280' : '#10b981', color: '#fff', border: 'none', cursor: running ? 'default' : 'pointer', fontWeight: 700, fontSize: 13 }}
+          onClick={start}
+          disabled={running}
+        >
+          {running ? '실행 중...' : '▶ 실행'}
+        </button>
+        <button style={{ padding: '6px 14px', borderRadius: 6, background: 'transparent', border: '1px solid #6b7280', color: 'var(--ifm-font-color-base)', cursor: 'pointer', fontSize: 13 }} onClick={reset}>초기화</button>
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {steps.map((s, i) => {
+          const active = step === i;
+          const done   = step > i;
+          return (
+            <div key={s.id} style={{
+              display: 'flex', alignItems: 'center', gap: 12,
+              padding: '10px 14px', borderRadius: 8,
+              background: active ? s.color + '22' : done ? 'var(--ifm-color-emphasis-100)' : 'transparent',
+              border: `2px solid ${active ? s.color : done ? s.color + '55' : 'var(--ifm-color-emphasis-200)'}`,
+              transition: 'all 0.3s',
+            }}>
+              <div style={{
+                width: 28, height: 28, borderRadius: '50%',
+                background: done || active ? s.color : 'var(--ifm-color-emphasis-200)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                color: '#fff', fontWeight: 700, fontSize: 12, flexShrink: 0,
+                transition: 'background 0.3s',
+              }}>{done ? '✓' : i + 1}</div>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 14, color: active ? s.color : 'var(--ifm-font-color-base)' }}>{s.label}</div>
+                {active && <div style={{ fontSize: 12, color: s.color, marginTop: 2 }}>{s.desc}</div>}
+              </div>
+              {active && <div style={{ marginLeft: 'auto', fontSize: 18 }}>◀</div>}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+export function MyBatisMapperCompare() {
+  const [tab, setTab] = useState('xml');
+
+  const xmlCode = `// 1. 인터페이스 정의 (메서드명 = XML id)
+@Mapper
+public interface EmpMapper {
+    List<EmpVO> getAllEmp();
+    EmpVO getEmpByNo(@Param("empno") int empno);
+}
+
+// 2. XML Mapper (resources/sql/emp-mapper.xml)
+<mapper namespace="com.min.edu.mapper.EmpMapper">
+  <select id="getAllEmp" resultType="EmpVO">
+    SELECT * FROM emp
+  </select>
+  <select id="getEmpByNo" resultType="EmpVO">
+    SELECT * FROM emp WHERE empno = #{empno}
+  </select>
+</mapper>
+
+// 3. application.properties
+mybatis.mapper-locations=classpath:sql/*.xml
+mybatis.type-aliases-package=com.min.edu.vo`;
+
+  const annoCode = `// 인터페이스에 SQL 직접 작성
+@Mapper
+public interface EmpMapper {
+
+    @Select("SELECT * FROM emp")
+    List<EmpVO> getAllEmp();
+
+    @Select("SELECT * FROM emp WHERE empno = #{empno}")
+    EmpVO getEmpByNo(@Param("empno") int empno);
+
+    // 동적 쿼리는 <script> 태그 필수!
+    @Select("""
+        <script>
+          SELECT * FROM emp
+          <where>
+            <if test="deptno != null">
+              AND deptno = #{deptno}
+            </if>
+          </where>
+        </script>
+        """)
+    List<EmpVO> getEmpByDept(@Param("deptno") Integer deptno);
+}`;
+
+  const tabStyle = (active) => ({
+    padding: '7px 18px',
+    borderBottom: active ? '2px solid var(--ifm-color-primary)' : '2px solid transparent',
+    color: active ? 'var(--ifm-color-primary)' : 'var(--ifm-color-secondary-darkest)',
+    fontWeight: active ? 700 : 400,
+    cursor: 'pointer',
+    fontSize: 14,
+    background: 'none',
+    border: 'none',
+    borderBottom: active ? '2px solid var(--ifm-color-primary)' : '2px solid transparent',
+  });
+
+  return (
+    <div style={{ border: '1px solid var(--ifm-color-emphasis-300)', borderRadius: 10, overflow: 'hidden', marginBottom: 24 }}>
+      <div style={{ display: 'flex', borderBottom: '1px solid var(--ifm-color-emphasis-300)', background: 'var(--ifm-color-emphasis-100)', padding: '0 8px' }}>
+        <button style={tabStyle(tab === 'xml')}  onClick={() => setTab('xml')}>XML Mapper (권장)</button>
+        <button style={tabStyle(tab === 'anno')} onClick={() => setTab('anno')}>Annotation Mapper</button>
+      </div>
+      <div style={{ padding: 16 }}>
+        {tab === 'xml' && (
+          <div>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+              {[
+                { label: '다이나믹 쿼리', ok: true },
+                { label: 'SQL 분리 관리', ok: true },
+                { label: '대규모 쿼리', ok: true },
+                { label: '빠른 프로토타입', ok: false },
+              ].map(b => (
+                <span key={b.label} style={{ fontSize: 12, padding: '3px 10px', borderRadius: 12, background: b.ok ? '#d1fae5' : '#fee2e2', color: b.ok ? '#065f46' : '#991b1b', fontWeight: 600 }}>
+                  {b.ok ? '✓' : '✗'} {b.label}
+                </span>
+              ))}
+            </div>
+            <pre style={{ background: 'var(--ifm-code-background)', padding: 16, borderRadius: 8, fontSize: 12, overflowX: 'auto', margin: 0 }}><code>{xmlCode}</code></pre>
+          </div>
+        )}
+        {tab === 'anno' && (
+          <div>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+              {[
+                { label: '설정 단순', ok: true },
+                { label: '한눈에 파악', ok: true },
+                { label: '다이나믹 쿼리', ok: false },
+                { label: '대규모 SQL', ok: false },
+              ].map(b => (
+                <span key={b.label} style={{ fontSize: 12, padding: '3px 10px', borderRadius: 12, background: b.ok ? '#d1fae5' : '#fee2e2', color: b.ok ? '#065f46' : '#991b1b', fontWeight: 600 }}>
+                  {b.ok ? '✓' : '✗'} {b.label}
+                </span>
+              ))}
+            </div>
+            <pre style={{ background: 'var(--ifm-code-background)', padding: 16, borderRadius: 8, fontSize: 12, overflowX: 'auto', margin: 0 }}><code>{annoCode}</code></pre>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export function ViewSetupCompare() {
+  const [highlight, setHighlight] = useState(null);
+
+  const jspItems = [
+    { key: 'dep',    label: '의존성 추가',        required: true,  detail: 'tomcat-jasper, servlet-api, jsp-api, jstl' },
+    { key: 'folder', label: 'webapp/WEB-INF/views 폴더 생성', required: true, detail: 'src/main/webapp 직접 생성 필요' },
+    { key: 'prefix', label: 'spring.mvc.view.prefix 설정', required: true, detail: '/WEB-INF/views/' },
+    { key: 'suffix', label: 'spring.mvc.view.suffix 설정', required: true, detail: '.jsp' },
+  ];
+
+  const thyItems = [
+    { key: 'dep',    label: '의존성 추가',      required: true,  detail: 'spring-boot-starter-thymeleaf' },
+    { key: 'folder', label: 'templates 폴더',   required: false, detail: 'resources/templates/ — 자동 인식' },
+    { key: 'prefix', label: 'prefix 설정',      required: false, detail: 'classpath:/templates/ — 자동 설정 ✓' },
+    { key: 'suffix', label: 'suffix 설정',       required: false, detail: '.html — 자동 설정 ✓' },
+  ];
+
+  const rowStyle = (req, key, side) => ({
+    display: 'flex', alignItems: 'flex-start', gap: 8, padding: '10px 12px', borderRadius: 6, marginBottom: 6,
+    background: highlight === key ? (req ? '#fee2e222' : '#d1fae522') : 'var(--ifm-color-emphasis-100)',
+    border: `1px solid ${highlight === key ? (req ? '#fca5a5' : '#6ee7b7') : 'var(--ifm-color-emphasis-200)'}`,
+    cursor: 'default',
+    transition: 'all 0.2s',
+  });
+
+  return (
+    <div style={{ border: '1px solid var(--ifm-color-emphasis-300)', borderRadius: 10, overflow: 'hidden', marginBottom: 24 }}>
+      <div style={{ padding: '12px 16px', background: 'var(--ifm-color-emphasis-100)', borderBottom: '1px solid var(--ifm-color-emphasis-300)', fontSize: 13, color: 'var(--ifm-color-secondary-darkest)' }}>
+        항목 위에 마우스를 올리면 JSP↔Thymeleaf 대응 관계를 확인할 수 있습니다.
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0 }}>
+        <div style={{ padding: 16, borderRight: '1px solid var(--ifm-color-emphasis-300)' }}>
+          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12, color: '#f59e0b' }}>JSP — 수동 설정</div>
+          {jspItems.map(item => (
+            <div key={item.key} style={rowStyle(item.required, item.key, 'jsp')} onMouseEnter={() => setHighlight(item.key)} onMouseLeave={() => setHighlight(null)}>
+              <span style={{ fontSize: 16, flexShrink: 0 }}>{'🔴'}</span>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600 }}>{item.label}</div>
+                <div style={{ fontSize: 11, color: 'var(--ifm-color-secondary-darkest)', marginTop: 2 }}>{item.detail}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div style={{ padding: 16 }}>
+          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12, color: '#10b981' }}>Thymeleaf — 자동 설정</div>
+          {thyItems.map(item => (
+            <div key={item.key} style={rowStyle(item.required, item.key, 'thy')} onMouseEnter={() => setHighlight(item.key)} onMouseLeave={() => setHighlight(null)}>
+              <span style={{ fontSize: 16, flexShrink: 0 }}>{item.required ? '🔴' : '🟢'}</span>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600 }}>{item.label}</div>
+                <div style={{ fontSize: 11, color: item.required ? 'var(--ifm-color-secondary-darkest)' : '#059669', marginTop: 2 }}>{item.detail}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div style={{ padding: '12px 16px', background: '#d1fae522', borderTop: '1px solid #6ee7b7' }}>
+        <strong style={{ fontSize: 13, color: '#065f46' }}>왜 자동인가?</strong>
+        <span style={{ fontSize: 13, color: 'var(--ifm-font-color-base)', marginLeft: 8 }}>
+          스타터 추가 시 <code>ThymeleafAutoConfiguration</code>이 <code>@ConditionalOnClass(TemplateMode.class)</code>로 활성화되고,
+          <code>ThymeleafProperties</code>가 기본값(<code>classpath:/templates/</code>, <code>.html</code>)을 등록합니다.
+          JSP는 이 자동 구성 경로에 없으므로 직접 지정이 필요합니다.
+        </span>
+      </div>
+    </div>
+  );
+}
+
+Spring Boot 기반 웹 개발에서 빠짐없이 등장하는 네 가지 핵심 기술 — **AOP, MyBatis, JSP, Thymeleaf** — 를 한 번에 정리합니다.
+
+<!-- truncate -->
+
+## AOP: 횡단 관심사를 분리하는 구조
+
+### CC와 CCC
+
+| 분류 | 의미 | 예시 |
+|---|---|---|
+| **CC** (Core Concern) | 반드시 구현해야 하는 핵심 기능 | 상품 조회, 주문 처리 |
+| **CCC** (Cross Cutting Concern) | 여러 기능에 공통으로 들어가는 요소 | 로깅, 트랜잭션, 권한 체크 |
+
+AOP는 CCC를 비즈니스 코드에 섞지 않고, **프록시(위빙)** 로 결합해 자동 적용합니다.
+
+### 주요 용어
+
+| 용어 | 역할 |
+|---|---|
+| **Advice** | CCC 기능을 담은 메서드 (`@Before`, `@After`, `@Around` 등) |
+| **Pointcut** | 어떤 메서드에 적용할지 `execution(...)` 표현식으로 지정 |
+| **JoinPoint** | 타깃 메서드의 어느 시점에 끼어들지 정의하는 지점 |
+| **Proxy** | CC + CCC가 결합된 실행 객체 (스프링이 런타임에 생성) |
+| **Weaving** | 프록시를 만들어 실제로 결합하는 과정 |
+
+### 포인트컷 `execution` 표현식
+
+```
+execution([리턴타입] [패키지].[클래스].[메서드]([아규먼트]))
+
+*         → 임의의 단일 요소
+..        → 0개 이상 (패키지 하위 전체 / 아규먼트 개수 무관)
+!void     → void가 아닌 모든 리턴 타입
+```
+
+예시:
+```java
+// com.min.edu 하위 전체 패키지, 모든 클래스, 모든 메서드
+@Pointcut("execution(* com.min.edu..*.*(..))")
+
+// 리턴 타입 무관, 이름이 *Dao*인 클래스의 모든 메서드
+@Pointcut("execution(* *Dao*.*(..))")
+```
+
+### 어드바이스 실행 순서 — 직접 확인해보세요
+
+`@Around`가 가장 바깥을 감싸며, `@After`는 정상/예외 무관하게 항상 실행됩니다.
+
+<AOPFlowViz />
+
+### 프록시 전략
+
+| 방식 | 조건 | 특징 |
+|---|---|---|
+| **JDK Proxy** | 인터페이스 존재 | 인터페이스 타입으로만 주입 가능 |
+| **CGLIB** | 클래스만 존재 | 클래스 상속으로 프록시 생성, Spring Boot 기본 |
+
+> 실무에서는 인터페이스 기반 설계(OCP)를 유지하고 포인트컷도 인터페이스 타입 기준으로 작성하는 것이 안정적입니다.
+
+---
+
+## MyBatis: Spring Boot 자동 구성 전후 비교
+
+Spring Boot 스타터 도입 시 기존 MyBatis 단독 구성에서 사라지는 요소들이 있습니다.
+
+| 항목 | 기존 (MyBatis 단독) | Spring Boot |
+|---|---|---|
+| config XML | 직접 작성 | 불필요 → `application.properties`로 대체 |
+| `SqlSessionFactory` | 직접 생성/관리 | 컨테이너가 빈으로 자동 관리 |
+| Mapper 등록 | XML에 명시 | `mapper-locations` 또는 어노테이션으로 지정 |
+| 별칭 설정 | config XML | `mybatis.type-aliases-package` |
+
+### 핵심 프로퍼티
+
+```properties
+# DB 접속
+spring.datasource.driver-class-name=oracle.jdbc.OracleDriver
+spring.datasource.url=jdbc:oracle:thin:@localhost:1521:xe
+spring.datasource.username=scott
+spring.datasource.password=tiger
+
+# MyBatis
+mybatis.type-aliases-package=com.min.edu.vo   # 복수 패키지는 콤마 구분
+mybatis.mapper-locations=classpath:sql/*.xml
+
+# 디버그 로그
+logging.level.com.min.edu.mapper=DEBUG
+```
+
+> **HikariCP**: Spring Boot의 기본 커넥션 풀. 과거 DBCP 계열 대비 성능이 우수합니다.
+
+### XML Mapper vs Annotation Mapper — 코드로 비교
+
+<MyBatisMapperCompare />
+
+**선택 기준**: 다이나믹 쿼리(`<if>`, `<choose>`, `<foreach>`)가 많거나 SQL 규모가 크면 XML Mapper, 단순 CRUD 프로토타입이면 Annotation Mapper.
+
+---
+
+## JSP vs Thymeleaf: 설정 차이와 자동 구성 원리
+
+### 설정 항목 비교 — 마우스를 올려 대응 관계 확인
+
+<ViewSetupCompare />
+
+### JSP 폴더 구조 (수동 생성 필요)
+
+```
+src/main/
+  webapp/
+    WEB-INF/
+      views/        ← JSP 파일 위치
+        emp-list.jsp
+```
+
+```properties
+# application.properties
+spring.mvc.view.prefix=/WEB-INF/views/
+spring.mvc.view.suffix=.jsp
+```
+
+### Thymeleaf 폴더 구조 (자동 인식)
+
+```
+src/main/
+  resources/
+    templates/      ← HTML 파일 위치 (prefix 기본값)
+      emp-list.html
+```
+
+```properties
+# 개발 편의를 위해 이 두 줄만 추가하면 충분
+spring.thymeleaf.cache=false
+spring.thymeleaf.encoding=UTF-8
+# prefix(classpath:/templates/), suffix(.html)는 자동 설정 — 명시 불필요
+```
+
+### 컨트롤러와 뷰 — 두 방식 공통
+
+```java
+@Controller
+public class EmpController {
+
+    @GetMapping("/emp/list")
+    public String list(Model model) {
+        model.addAttribute("list", empService.getAll());
+        return "emp-list";   // prefix + "emp-list" + suffix 로 변환
+    }
+}
+```
+
+### Thymeleaf 핵심 문법
+
+```html
+<!-- 네임스페이스 선언 -->
+<html xmlns:th="http://www.thymeleaf.org">
+
+<!-- 출력 -->
+<td th:text="${vo.ename}">홍길동</td>
+
+<!-- 반복 -->
+<tr th:each="vo : ${list}">
+
+<!-- 조건 -->
+<p th:if="${#lists.isEmpty(list)}">데이터 없음</p>
+
+<!-- 링크 -->
+<a th:href="@{/emp/list}">목록</a>
+
+<!-- 링크 + 파라미터 -->
+<a th:href="@{/emp/detail(empno=${vo.empno})}">상세</a>
+```
+
+---
+
+## 한눈에 정리
+
+| 기술 | 핵심 포인트 |
+|---|---|
+| **AOP** | `@Around`가 가장 바깥, `@After`는 항상 실행, `@AfterReturning`/`@AfterThrowing`은 결과에 따라 분기 |
+| **MyBatis** | Spring Boot에서 `SqlSessionFactory` 자동 관리, XML Mapper는 다이나믹 쿼리에 강점 |
+| **JSP** | Jasper 의존성 + `webapp` 폴더 + `prefix`/`suffix` 모두 수동 설정 |
+| **Thymeleaf** | 스타터 추가만으로 `ThymeleafAutoConfiguration`이 `prefix`/`suffix` 자동 등록, `templates/` 폴더 인식 |
+
+> 화면 기술(JSP → Thymeleaf → React)이 바뀌어도 **서버(Spring Boot Controller + Service + Repository)는 동일**합니다. 뷰 레이어만 교체된다는 관점을 유지하면 기술 전환이 훨씬 수월합니다.

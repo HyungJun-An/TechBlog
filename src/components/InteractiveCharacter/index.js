@@ -230,8 +230,8 @@ function Antenna() {
 function EarPad({ side }) {
   const x = side === 'left' ? -0.65 : 0.65;
   return (
-    <mesh position={[x, 0.05, 0]}>
-      <cylinderGeometry args={[0.12, 0.12, 0.08, 16]} rotation={[0, 0, Math.PI / 2]} />
+    <mesh position={[x, 0.05, 0]} rotation={[0, 0, Math.PI / 2]}>
+      <cylinderGeometry args={[0.12, 0.12, 0.08, 16]} />
       <meshStandardMaterial color="#d4d0e0" roughness={0.3} metalness={0.1} />
     </mesh>
   );
@@ -404,23 +404,17 @@ function Scene() {
   );
 }
 
-// ── 스크롤 투명도 + SSR 호환 래퍼 ──
+// ── 스크롤 투명도 래퍼 (BrowserOnly 안에서만 렌더링됨) ──
 export default function InteractiveCharacter() {
   const [opacity, setOpacity] = useState(1);
-  const [mounted, setMounted] = useState(false);
-
-  useEffect(() => { setMounted(true); }, []);
 
   useEffect(() => {
-    if (!mounted) return;
     const handle = () => {
       setOpacity(Math.max(0, 1 - window.scrollY / 500));
     };
     window.addEventListener('scroll', handle, { passive: true });
     return () => window.removeEventListener('scroll', handle);
-  }, [mounted]);
-
-  if (!mounted) return null;
+  }, []);
 
   return (
     <div style={{
@@ -433,9 +427,14 @@ export default function InteractiveCharacter() {
       <CanvasErrorBoundary>
         <Canvas
           camera={{ position: [0, 0, 3.5], fov: 45 }}
-          // 높이를 명시해 프로덕션 CSS 로딩 순서 차이로 height:0 이 되는 현상 방지
           style={{ background: 'transparent', width: '100%', height: '100%' }}
-          gl={{ alpha: true, antialias: true, powerPreference: 'high-performance' }}
+          gl={{
+            alpha: true,
+            antialias: false,
+            powerPreference: 'default',
+            failIfMajorPerformanceCaveat: false,
+          }}
+          dpr={[1, 1.5]}
         >
           <Scene />
         </Canvas>
