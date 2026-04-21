@@ -1,0 +1,505 @@
+---
+title: "Spring Boot Thymeleaf 문법, AJAX, 필터, 트랜잭션 핵심 정리"
+date: 2026-04-21
+authors: HyungJun
+tags: [Spring, Java, 기본기]
+---
+
+import { useState, useEffect, useRef } from 'react';
+
+export function ThymeleafSyntaxDemo() {
+  const examples = [
+    {
+      id: 'text',
+      label: 'th:text',
+      desc: '태그 콘텐츠로 값 출력 (HTML 이스케이프 적용)',
+      template: `<span th:text="\${vo.ename}">기본값</span>`,
+      rendered: `<span>KING</span>`,
+      note: '태그 내부 기본값은 Thymeleaf가 실행되지 않는 환경(파일 직접 열기 등)에서만 보입니다.',
+    },
+    {
+      id: 'value',
+      label: 'th:value',
+      desc: 'input 같은 빈 엘리먼트에 값 주입',
+      template: `<input type="hidden" name="empno"\n  th:value="\${vo.empno}">`,
+      rendered: `<input type="hidden" name="empno" value="7839">`,
+      note: 'input은 닫는 태그가 없으므로 th:text 대신 th:value를 사용합니다.',
+    },
+    {
+      id: 'href',
+      label: 'th:href',
+      desc: 'URL 템플릿 문법으로 링크 생성',
+      template: `<a th:href="@{/emp/select(empno=\${vo.empno})}">상세</a>`,
+      rendered: `<a href="/emp/select?empno=7839">상세</a>`,
+      note: '@{...} 문법은 컨텍스트 패스를 자동으로 포함합니다.',
+    },
+    {
+      id: 'action',
+      label: 'th:action',
+      desc: '폼 전송 URL 지정',
+      template: `<form th:action="@{/emp/update}" method="post">\n  <input name="empno" th:value="\${vo.empno}">\n  <button type="submit">수정</button>\n</form>`,
+      rendered: `<form action="/emp/update" method="post">\n  <input name="empno" value="7839">\n  <button type="submit">수정</button>\n</form>`,
+      note: 'method="post"는 그대로 두고 action URL만 타임리프로 처리합니다.',
+    },
+    {
+      id: 'each',
+      label: 'th:each',
+      desc: '컬렉션 반복 출력',
+      template: `<tr th:each="vo : \${list}">\n  <td th:text="\${vo.empno}"></td>\n  <td th:text="\${vo.ename}"></td>\n</tr>`,
+      rendered: `<tr>\n  <td>7839</td>\n  <td>KING</td>\n</tr>\n<tr>\n  <td>7698</td>\n  <td>BLAKE</td>\n</tr>`,
+      note: '향상된 for문과 동일한 구조입니다. JSP의 c:forEach와 역할이 같습니다.',
+    },
+    {
+      id: 'attr',
+      label: 'th:attr (data-*)',
+      desc: '커스텀 data-* 속성에 값 주입',
+      template: `<button th:attr="data-empno=\${vo.empno}"\n  onclick="send(this)">AJAX 전송</button>`,
+      rendered: `<button data-empno="7839"\n  onclick="send(this)">AJAX 전송</button>`,
+      note: 'onclick에서 this.getAttribute("data-empno")로 값을 읽습니다.',
+    },
+  ];
+
+  const [active, setActive] = useState('text');
+  const ex = examples.find(e => e.id === active);
+
+  const tabStyle = (id) => ({
+    padding: '6px 14px',
+    border: 'none',
+    borderBottom: active === id ? '2px solid var(--ifm-color-primary)' : '2px solid transparent',
+    background: 'none',
+    color: active === id ? 'var(--ifm-color-primary)' : 'var(--ifm-color-secondary-darkest)',
+    fontWeight: active === id ? 700 : 400,
+    cursor: 'pointer',
+    fontSize: 13,
+    fontFamily: 'monospace',
+  });
+
+  return (
+    <div style={{ border: '1px solid var(--ifm-color-emphasis-300)', borderRadius: 10, overflow: 'hidden', marginBottom: 24 }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', background: 'var(--ifm-color-emphasis-100)', borderBottom: '1px solid var(--ifm-color-emphasis-300)', padding: '0 8px' }}>
+        {examples.map(e => <button key={e.id} style={tabStyle(e.id)} onClick={() => setActive(e.id)}>{e.label}</button>)}
+      </div>
+      <div style={{ padding: 16 }}>
+        <p style={{ margin: '0 0 12px', fontSize: 13, color: 'var(--ifm-color-secondary-darkest)' }}>{ex.desc}</p>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#6b7280', marginBottom: 4 }}>템플릿 (th:* 속성)</div>
+            <pre style={{ background: '#1e1e2e', color: '#cdd6f4', padding: 14, borderRadius: 8, fontSize: 12, margin: 0, overflowX: 'auto' }}><code>{ex.template}</code></pre>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#059669', marginBottom: 4 }}>렌더링 결과 (서버값 바인딩 후)</div>
+            <pre style={{ background: '#0f2417', color: '#86efac', padding: 14, borderRadius: 8, fontSize: 12, margin: 0, overflowX: 'auto' }}><code>{ex.rendered}</code></pre>
+          </div>
+        </div>
+        <div style={{ marginTop: 10, padding: '8px 12px', background: 'var(--ifm-color-emphasis-100)', borderRadius: 6, fontSize: 12, color: 'var(--ifm-color-secondary-darkest)', borderLeft: '3px solid var(--ifm-color-primary)' }}>
+          💡 {ex.note}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function FetchFlowViz() {
+  const [step, setStep] = useState(-1);
+  const [success, setSuccess] = useState(true);
+  const [running, setRunning] = useState(false);
+  const timerRef = useRef(null);
+
+  const successSteps = [
+    { label: 'fetch 호출',         color: '#3b82f6', side: 'client', desc: "method: 'POST', headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body: 'empno=7839'" },
+    { label: 'HTTP 요청 전송',     color: '#6366f1', side: 'network', desc: 'POST /emp/ajax — 요청 헤더와 바디가 서버로 전달됩니다.' },
+    { label: '@RequestParam 바인딩', color: '#8b5cf6', side: 'server', desc: '스프링이 body에서 empno 값을 꺼내 파라미터로 전달합니다.' },
+    { label: '@ResponseBody 반환', color: '#10b981', side: 'server', desc: '뷰 리졸버를 거치지 않고 응답 바디에 문자열을 직접 씁니다.' },
+    { label: 'response.ok 확인',   color: '#f59e0b', side: 'client', desc: 'HTTP 200~299이면 true → .text() / .json()으로 파싱합니다.' },
+    { label: 'DOM 업데이트',        color: '#06b6d4', side: 'client', desc: "document.getElementById('result').innerHTML = data" },
+  ];
+
+  const failSteps = [
+    { label: 'fetch 호출',         color: '#3b82f6', side: 'client', desc: "method: 'POST', body: 'empno=7839'" },
+    { label: 'HTTP 요청 전송',     color: '#6366f1', side: 'network', desc: '요청이 서버로 전달됩니다.' },
+    { label: '서버 오류 발생',     color: '#ef4444', side: 'server', desc: 'DB 오류 또는 예외 발생 → 500 Internal Server Error 응답' },
+    { label: 'response.ok = false', color: '#f97316', side: 'client', desc: '200~299 범위 외 상태 코드 → ok가 false입니다.' },
+    { label: 'throw new Error()',  color: '#ef4444', side: 'client', desc: 'throw로 예외를 발생시켜 .catch() 블록으로 흐름을 넘깁니다.' },
+    { label: '.catch() 실행',      color: '#dc2626', side: 'client', desc: 'console.log 또는 사용자에게 에러 메시지를 표시합니다.' },
+  ];
+
+  const steps = success ? successSteps : failSteps;
+
+  const run = () => {
+    if (running) return;
+    setStep(-1);
+    setRunning(true);
+    let i = 0;
+    const tick = () => {
+      setStep(i++);
+      if (i < steps.length) timerRef.current = setTimeout(tick, 650);
+      else setRunning(false);
+    };
+    timerRef.current = setTimeout(tick, 200);
+  };
+
+  useEffect(() => () => clearTimeout(timerRef.current), []);
+
+  const sideColor = { client: '#3b82f6', network: '#6366f1', server: '#10b981' };
+  const sideBg   = { client: '#eff6ff', network: '#eef2ff', server: '#f0fdf4' };
+
+  return (
+    <div style={{ border: '1px solid var(--ifm-color-emphasis-300)', borderRadius: 10, overflow: 'hidden', marginBottom: 24 }}>
+      <div style={{ padding: '12px 16px', background: 'var(--ifm-color-emphasis-100)', borderBottom: '1px solid var(--ifm-color-emphasis-300)', display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        <span style={{ fontSize: 13, fontWeight: 700 }}>시나리오:</span>
+        {[{ v: true, l: '성공 (200 OK)' }, { v: false, l: '실패 (500 Error)' }].map(({ v, l }) => (
+          <button key={String(v)} onClick={() => { setSuccess(v); setStep(-1); setRunning(false); clearTimeout(timerRef.current); }}
+            style={{ padding: '5px 14px', borderRadius: 6, border: `1px solid ${v ? '#10b981' : '#ef4444'}`, background: success === v ? (v ? '#10b981' : '#ef4444') : 'transparent', color: success === v ? '#fff' : (v ? '#10b981' : '#ef4444'), cursor: 'pointer', fontWeight: 600, fontSize: 12 }}>{l}</button>
+        ))}
+        <div style={{ flex: 1 }} />
+        <button onClick={run} disabled={running}
+          style={{ padding: '6px 18px', borderRadius: 6, background: running ? '#6b7280' : 'var(--ifm-color-primary)', color: '#fff', border: 'none', cursor: running ? 'default' : 'pointer', fontWeight: 700, fontSize: 13 }}>
+          {running ? '실행 중...' : '▶ 흐름 실행'}
+        </button>
+      </div>
+
+      <div style={{ padding: 16, display: 'flex', gap: 8, marginBottom: 8 }}>
+        {Object.entries({ client: '클라이언트 (JS)', network: '네트워크', server: '서버 (Spring)' }).map(([k, v]) => (
+          <span key={k} style={{ fontSize: 11, padding: '2px 10px', borderRadius: 10, background: sideBg[k], color: sideColor[k], fontWeight: 700, border: `1px solid ${sideColor[k]}44` }}>{v}</span>
+        ))}
+      </div>
+
+      <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {steps.map((s, i) => {
+          const active = step === i;
+          const done   = step > i;
+          return (
+            <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px', borderRadius: 8,
+              background: active ? s.color + '18' : done ? 'var(--ifm-color-emphasis-100)' : 'transparent',
+              border: `2px solid ${active ? s.color : done ? s.color + '66' : 'var(--ifm-color-emphasis-200)'}`,
+              transition: 'all 0.3s' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, flexShrink: 0 }}>
+                <div style={{ width: 26, height: 26, borderRadius: '50%', background: done || active ? s.color : 'var(--ifm-color-emphasis-200)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, fontSize: 11 }}>{done ? '✓' : i + 1}</div>
+                <span style={{ fontSize: 9, padding: '1px 5px', borderRadius: 4, background: sideBg[s.side], color: sideColor[s.side], fontWeight: 700, whiteSpace: 'nowrap' }}>{s.side}</span>
+              </div>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 13, color: active ? s.color : 'var(--ifm-font-color-base)', fontFamily: 'monospace' }}>{s.label}</div>
+                {active && <div style={{ fontSize: 11, color: 'var(--ifm-color-secondary-darkest)', marginTop: 3 }}>{s.desc}</div>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+export function TransactionDemo() {
+  const [forceError, setForceError] = useState(false);
+  const [step, setStep] = useState(-1);
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState(null);
+  const timerRef = useRef(null);
+
+  const steps = [
+    { label: '@Transactional 시작',      color: '#8b5cf6', desc: 'Propagation.REQUIRED: 기존 트랜잭션 있으면 참여, 없으면 새로 시작' },
+    { label: 'UPDATE 실행',              color: '#3b82f6', desc: 'UPDATE jobs SET max_salary = ... — 영향 row: 1' },
+    { label: '결과 검증 (n == 0 체크)',  color: '#f59e0b', desc: '영향받은 row가 0이면 throw → 트랜잭션 매니저에게 롤백 신호' },
+    { label: 'INSERT 실행',              color: forceError ? '#ef4444' : '#3b82f6', desc: forceError ? '강제 예외 발생! throw new Exception("insert 실패")' : 'INSERT INTO jobs ... — 영향 row: 1' },
+    { label: forceError ? '롤백' : '커밋', color: forceError ? '#ef4444' : '#10b981', desc: forceError ? 'UPDATE도 취소됩니다 — DB는 최초 상태로 복원됩니다.' : '두 작업 모두 DB에 반영됩니다.' },
+  ];
+
+  const run = () => {
+    if (running) return;
+    setStep(-1);
+    setResult(null);
+    setRunning(true);
+    let i = 0;
+    const tick = () => {
+      setStep(i);
+      if (i === steps.length - 1) {
+        setResult(forceError ? 'fail' : 'success');
+        setRunning(false);
+      } else {
+        timerRef.current = setTimeout(tick, 700);
+        i++;
+      }
+    };
+    timerRef.current = setTimeout(tick, 200);
+  };
+
+  useEffect(() => () => clearTimeout(timerRef.current), []);
+
+  return (
+    <div style={{ border: '1px solid var(--ifm-color-emphasis-300)', borderRadius: 10, overflow: 'hidden', marginBottom: 24 }}>
+      <div style={{ padding: '12px 16px', background: 'var(--ifm-color-emphasis-100)', borderBottom: '1px solid var(--ifm-color-emphasis-300)', display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13, fontWeight: 700 }}>
+          <div onClick={() => { if (!running) { setForceError(f => !f); setStep(-1); setResult(null); } }}
+            style={{ width: 42, height: 22, borderRadius: 11, background: forceError ? '#ef4444' : '#d1d5db', position: 'relative', cursor: 'pointer', transition: 'background 0.3s' }}>
+            <div style={{ position: 'absolute', top: 2, left: forceError ? 22 : 2, width: 18, height: 18, borderRadius: '50%', background: '#fff', transition: 'left 0.3s' }} />
+          </div>
+          강제 예외 발생 {forceError ? '🔴 ON' : '🟢 OFF'}
+        </label>
+        <div style={{ flex: 1 }} />
+        <button onClick={run} disabled={running}
+          style={{ padding: '6px 18px', borderRadius: 6, background: running ? '#6b7280' : 'var(--ifm-color-primary)', color: '#fff', border: 'none', cursor: running ? 'default' : 'pointer', fontWeight: 700, fontSize: 13 }}>
+          {running ? '실행 중...' : '▶ 트랜잭션 실행'}
+        </button>
+      </div>
+
+      <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {steps.map((s, i) => {
+          const active = step === i;
+          const done   = step > i;
+          return (
+            <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px', borderRadius: 8,
+              background: active ? s.color + '18' : done ? 'var(--ifm-color-emphasis-100)' : 'transparent',
+              border: `2px solid ${active ? s.color : done ? s.color + '55' : 'var(--ifm-color-emphasis-200)'}`,
+              transition: 'all 0.3s' }}>
+              <div style={{ width: 26, height: 26, borderRadius: '50%', background: done || active ? s.color : 'var(--ifm-color-emphasis-200)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, fontSize: 11, flexShrink: 0 }}>
+                {done ? '✓' : i + 1}
+              </div>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 13, color: active ? s.color : 'var(--ifm-font-color-base)' }}>{s.label}</div>
+                {active && <div style={{ fontSize: 11, color: 'var(--ifm-color-secondary-darkest)', marginTop: 3 }}>{s.desc}</div>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {result && (
+        <div style={{ margin: '0 16px 16px', padding: '12px 16px', borderRadius: 8, background: result === 'success' ? '#d1fae5' : '#fee2e2', border: `1px solid ${result === 'success' ? '#6ee7b7' : '#fca5a5'}` }}>
+          <strong style={{ fontSize: 14, color: result === 'success' ? '#065f46' : '#991b1b' }}>
+            {result === 'success' ? '✅ 커밋 완료 — UPDATE + INSERT 모두 DB에 반영됨' : '❌ 롤백 완료 — UPDATE도 취소됨, DB는 최초 상태 유지'}
+          </strong>
+          <p style={{ margin: '6px 0 0', fontSize: 12, color: result === 'success' ? '#065f46' : '#991b1b' }}>
+            {result === 'success' ? '두 작업이 하나의 트랜잭션 단위로 묶여 모두 성공했습니다.' : '예외 발생 → @Transactional이 롤백을 자동 수행합니다. DB 오류가 없어도 throw로 롤백을 유도할 수 있습니다.'}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+Spring Boot 웹 개발의 핵심 흐름 — **Thymeleaf 바인딩 문법, fetch 기반 AJAX, 트랜잭션 롤백 제어, 웹 필터 접속 로그, 전역 예외 처리** — 를 실습 흐름 그대로 정리합니다.
+
+<!-- truncate -->
+
+## Thymeleaf 바인딩 문법 완전 정리
+
+타임리프는 HTML 속성(`th:*`)으로 서버 값을 주입합니다. JSP의 EL/JSTL과 역할은 같지만 "HTML 형태를 유지"한다는 점이 핵심입니다.
+
+<ThymeleafSyntaxDemo />
+
+### 포인트 정리
+
+| 상황 | 올바른 문법 | 잘못된 접근 |
+|---|---|---|
+| 태그 내용 출력 | `th:text="${vo.ename}"` | 태그 안에 EL 직접 삽입 |
+| 빈 요소 값 | `th:value="${vo.empno}"` | `th:text` 적용 시 렌더링 안 됨 |
+| URL 생성 | `th:href="@{/path(key=${val})}"` | 쿼리스트링 직접 문자열 조합 |
+| 커스텀 데이터 | `th:attr="data-id=${vo.id}"` | `onclick="fn(${vo.id})"` 직접 주입 |
+
+> `onclick="fn('[[${vo.ename}]]')"` 처럼 문자열을 JS 함수 인자로 직접 주입하면 특수문자 처리가 복잡합니다. `data-*` 속성에 값을 심고 `this.getAttribute()`로 읽는 패턴을 권장합니다.
+
+---
+
+## fetch 기반 AJAX와 @ResponseBody
+
+### 서버: 뷰 리졸버를 타지 않는 직접 반환
+
+```java
+// @ResponseBody → 뷰 이름이 아닌 값 자체를 HTTP 응답 바디에 씁니다
+@ResponseBody
+@PostMapping("/emp/ajax")
+public String ajax(@RequestParam("empno") String empno) {
+    return empno + "님 반갑습니다.";
+}
+
+// 클래스 전체에 적용하려면 @RestController
+// = @Controller + @ResponseBody
+@RestController
+public class EmpApiController { ... }
+```
+
+> **면접 포인트**: `@ResponseBody`는 내부적으로 `HttpServletResponse`의 `PrintWriter`로 값을 직접 출력합니다. 뷰 리졸버를 거치지 않습니다.
+
+### 클라이언트: fetch 요청 흐름
+
+아래 시뮬레이터로 성공/실패 흐름을 직접 확인해보세요.
+
+<FetchFlowViz />
+
+```js
+function sendEmp(empno) {
+  fetch('/emp/ajax', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: 'empno=' + empno
+  })
+  .then(response => {
+    // 200~299가 아니면 response.ok === false
+    if (!response.ok) throw new Error('서버 오류: ' + response.status);
+    return response.text();
+  })
+  .then(data => {
+    document.getElementById('result').innerHTML = data;
+  })
+  .catch(error => console.log('에러:', error));
+}
+```
+
+### MIME 타입 선택 기준
+
+| MIME 타입 | 언제 사용 | 서버 바인딩 |
+|---|---|---|
+| `application/x-www-form-urlencoded` | 일반 파라미터 전송 | `@RequestParam` |
+| `application/json` | 객체 구조 전송 | `@RequestBody` |
+| `multipart/form-data` | 파일 업로드 포함 | `@RequestPart` |
+
+---
+
+## @Transactional 트랜잭션과 강제 롤백
+
+### 핵심 개념
+
+트랜잭션은 여러 DB 작업을 "전부 성공 또는 전부 실패"로 묶는 메커니즘입니다.
+
+| 항목 | 내용 |
+|---|---|
+| 전파 기본값 | `Propagation.REQUIRED` — 기존 트랜잭션 참여, 없으면 새로 시작 |
+| 롤백 트리거 | 예외 발생 (`RuntimeException`은 기본 롤백, 체크 예외는 `rollbackFor` 명시) |
+| DB 오류만으론 부족 | 앱 레벨 실패(영향 row = 0)도 `throw`로 알려야 트랜잭션 매니저가 롤백 |
+
+### 트랜잭션 흐름 시뮬레이터
+
+토글을 켜면 INSERT 시점에 강제 예외를 발생시켜 롤백이 어떻게 동작하는지 확인할 수 있습니다.
+
+<TransactionDemo />
+
+```java
+@Transactional(rollbackFor = Exception.class)
+public void updateAndInsert(JobVO vo) throws Exception {
+    int n = jobMapper.updateJob(vo);
+
+    // DB 오류가 없어도 0건이면 실패로 간주 → throw로 롤백 유도
+    if (n == 0) throw new Exception("update 실패: 대상 row 없음");
+
+    int m = jobMapper.insertJob(vo);
+    if (m == 0) throw new Exception("insert 실패");
+}
+```
+
+> `@Transactional`이 없으면 UPDATE가 성공해도 INSERT가 실패할 때 이미 실행된 UPDATE는 그대로 남습니다.
+
+---
+
+## MyBatis + MVC 계층 분리
+
+```
+Controller  ← 요청 URL 매핑, 모델 담기, 뷰 이름 반환
+    ↓ @Autowired
+Service     ← 매퍼 조합, 트랜잭션 경계(@Transactional)
+    ↓ @Autowired
+Mapper(@Mapper) ← SQL 실행 단위 (XML id = 인터페이스 메소드명)
+```
+
+**AOP로 매퍼 공통 로깅:**
+
+```java
+@Aspect @Component
+public class MapperLoggingAspect {
+
+    @Pointcut("execution(* com.min.edu.mapper..*.*(..))")
+    public void mapperMethods() {}
+
+    @Before("mapperMethods()")
+    public void logBefore(JoinPoint jp) {
+        log.info("[매퍼 호출] {} / args={}", jp.getSignature().getName(),
+                 Arrays.toString(jp.getArgs()));
+    }
+
+    @AfterThrowing(pointcut = "mapperMethods()", throwing = "e")
+    public void logException(Exception e) {
+        log.error("[매퍼 예외] {}", e.getMessage());
+    }
+}
+```
+
+---
+
+## @WebFilter 웹 필터 — 접속 로그
+
+```java
+@WebFilter(urlPatterns = "/*")   // 모든 요청을 가로챕니다
+public class AccessLogFilter implements Filter {
+
+    @Override
+    public void doFilter(ServletRequest req, ServletResponse res, FilterChain chain)
+            throws IOException, ServletException {
+
+        HttpServletRequest request = (HttpServletRequest) req;
+
+        String ip    = request.getRemoteAddr();
+        String url   = request.getRequestURL().toString();
+        String query = request.getQueryString();           // ?empno=7839 부분
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("[접속] IP=").append(ip)
+          .append(" | URL=").append(url);
+
+        // 쿼리스트링이 없으면 null → StringUtils로 안전하게 처리
+        if (StringUtils.isNotEmpty(query)) {
+            sb.append("?").append(query);
+        }
+
+        log.info(sb.toString());
+        chain.doFilter(req, res);   // 반드시 호출 — 다음 단계로 흐름 전달
+    }
+}
+```
+
+| 수집 항목 | API | 의미 |
+|---|---|---|
+| 원격 IP | `getRemoteAddr()` | 요청 클라이언트 주소 |
+| 전체 URL | `getRequestURL().toString()` | 프로토콜 포함 |
+| 쿼리스트링 | `getQueryString()` | `?` 뒤 파라미터 원문, 없으면 `null` |
+
+> 실무 활용: 반복 요청 봇 IP 차단, 내부망 IP 외 접근 차단, PV/유입 경로 분석
+
+---
+
+## @ControllerAdvice 전역 예외 처리
+
+컨트롤러마다 `try-catch`를 반복하지 않고 전역 처리기 하나로 모든 예외를 처리합니다.
+
+```java
+@ControllerAdvice
+public class GlobalExceptionHandler {
+
+    @ExceptionHandler(Exception.class)
+    public String handleException(Exception e, Model model) {
+        model.addAttribute("message", e.getMessage());
+        model.addAttribute("status",  500);
+        return "error/error";   // templates/error/error.html 로 이동
+    }
+}
+```
+
+```html
+<!-- templates/error/error.html -->
+<h2>오류가 발생했습니다</h2>
+<p th:text="${message}">오류 메시지</p>
+<button onclick="history.go(-1)">이전으로</button>
+```
+
+> REST API 프로젝트라면 뷰 이름 반환 대신 `@ExceptionHandler` + `ResponseEntity<ErrorResponse>` 조합으로 JSON 에러 바디를 반환합니다.
+
+---
+
+## 한눈에 정리
+
+| 기술 | 핵심 포인트 |
+|---|---|
+| **Thymeleaf 문법** | 콘텐츠 출력 → `th:text`, 속성값 → `th:value`, JS 값 전달 → `data-*` + `getAttribute` |
+| **fetch AJAX** | `response.ok` 체크 → `throw` → `.catch()` 템플릿 고정, MIME 타입 일치 필수 |
+| **@ResponseBody** | 뷰 리졸버를 거치지 않고 응답 바디에 직접 씀, `@RestController = @Controller + @ResponseBody` |
+| **@Transactional** | DB 오류뿐 아니라 앱 레벨 실패도 `throw`로 알려야 롤백, 기본 전파는 `REQUIRED` |
+| **@WebFilter** | `chain.doFilter()` 호출 누락 시 요청이 중단됨, 쿼리스트링은 `null` 체크 필수 |
+| **@ControllerAdvice** | 전역 예외 한 곳 처리, REST면 `ResponseEntity`, MVC면 뷰 이름 반환 |
