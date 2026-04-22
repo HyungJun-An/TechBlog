@@ -1,0 +1,711 @@
+---
+title: "Spring MVC 컨트롤러 요청 처리 완전 정리"
+date: 2026-04-22
+authors: HyungJun
+tags: [Spring, Java, 기본기]
+---
+
+import { useState, useEffect, useRef } from 'react';
+
+export function MVCFlowViz() {
+  const [step, setStep] = useState(-1);
+  const [running, setRunning] = useState(false);
+  const timerRef = useRef(null);
+
+  const steps = [
+    { label: 'GET /board/list', desc: '브라우저가 HTTP 요청을 전송합니다.', side: 'browser', color: '#3b82f6' },
+    { label: 'DispatcherServlet 수신', desc: '모든 요청의 관문. 핸들러 탐색을 HandlerMapping에 위임합니다.', side: 'spring', color: '#8b5cf6' },
+    { label: 'HandlerMapping 탐색', desc: '@GetMapping("/board/list")에 매핑된 컨트롤러 메소드를 찾습니다.', side: 'spring', color: '#6366f1' },
+    { label: 'HandlerAdapter 호출', desc: '파라미터 바인딩 + 컨트롤러 메소드 실행을 담당합니다.', side: 'spring', color: '#7c3aed' },
+    { label: 'BoardController.list()', desc: 'boardService.getList() 호출 후 Model에 결과를 담습니다.', side: 'controller', color: '#0891b2' },
+    { label: 'BoardService.getList()', desc: '비즈니스 로직 실행. @Transactional 트랜잭션 경계.', side: 'service', color: '#0d9488' },
+    { label: 'BoardMapper.selectAll()', desc: 'MyBatis → board_mapper.xml SQL 실행 (SELECT * FROM board)', side: 'mapper', color: '#059669' },
+    { label: 'DB 쿼리 실행', desc: 'ResultSet → List<BoardVO> 객체 변환 후 반환', side: 'db', color: '#16a34a' },
+    { label: 'model.addAttribute("list", boardList)', desc: 'Model에 담긴 데이터는 뷰 렌더링까지 전달됩니다.', side: 'controller', color: '#0891b2' },
+    { label: 'ViewResolver: "board/list"', desc: '"board/list" → templates/board/list.html 매핑', side: 'spring', color: '#8b5cf6' },
+    { label: 'Thymeleaf 렌더링', desc: 'th:each, th:text 등으로 HTML 생성. ${list} 데이터 바인딩.', side: 'view', color: '#f59e0b' },
+    { label: 'HTTP 200 응답', desc: '완성된 HTML이 브라우저로 전송됩니다.', side: 'browser', color: '#3b82f6' },
+  ];
+
+  const sideColor = { browser: '#3b82f6', spring: '#8b5cf6', controller: '#0891b2', service: '#0d9488', mapper: '#059669', db: '#16a34a', view: '#f59e0b' };
+  const sideLabel = { browser: '브라우저', spring: 'Spring', controller: 'Controller', service: 'Service', mapper: 'Mapper', db: 'DB', view: 'View' };
+  const sideBg   = { browser: '#eff6ff', spring: '#f5f3ff', controller: '#ecfeff', service: '#f0fdfa', mapper: '#f0fdf4', db: '#f0fdf4', view: '#fffbeb' };
+
+  const run = () => {
+    if (running) return;
+    setStep(-1);
+    setRunning(true);
+    let i = 0;
+    const tick = () => {
+      setStep(i++);
+      if (i < steps.length) timerRef.current = setTimeout(tick, 480);
+      else setRunning(false);
+    };
+    timerRef.current = setTimeout(tick, 150);
+  };
+
+  const reset = () => {
+    clearTimeout(timerRef.current);
+    setStep(-1);
+    setRunning(false);
+  };
+
+  useEffect(() => () => clearTimeout(timerRef.current), []);
+
+  return (
+    <div style={{ border: '1px solid var(--ifm-color-emphasis-300)', borderRadius: 10, overflow: 'hidden', marginBottom: 24 }}>
+      <div style={{ padding: '12px 16px', background: 'var(--ifm-color-emphasis-100)', borderBottom: '1px solid var(--ifm-color-emphasis-300)', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <span style={{ fontWeight: 700, fontSize: 13 }}>GET /board/list 요청 처리 흐름</span>
+        <div style={{ flex: 1 }} />
+        <button onClick={reset} disabled={running}
+          style={{ padding: '5px 12px', borderRadius: 6, background: 'transparent', border: '1px solid var(--ifm-color-emphasis-400)', color: 'var(--ifm-font-color-base)', cursor: 'pointer', fontSize: 12 }}>
+          초기화
+        </button>
+        <button onClick={run} disabled={running}
+          style={{ padding: '6px 18px', borderRadius: 6, background: running ? '#6b7280' : 'var(--ifm-color-primary)', color: '#fff', border: 'none', cursor: running ? 'default' : 'pointer', fontWeight: 700, fontSize: 13 }}>
+          {running ? '처리 중...' : '▶ 요청 시뮬레이션'}
+        </button>
+      </div>
+      <div style={{ padding: '6px 16px 8px', background: 'var(--ifm-color-emphasis-100)', borderBottom: '1px solid var(--ifm-color-emphasis-200)', display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+        {Object.entries(sideLabel).map(([k, v]) => (
+          <span key={k} style={{ fontSize: 10, padding: '2px 8px', borderRadius: 10, background: sideBg[k], color: sideColor[k], fontWeight: 700, border: `1px solid ${sideColor[k]}44` }}>{v}</span>
+        ))}
+      </div>
+      <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 5 }}>
+        {steps.map((s, i) => {
+          const active = step === i;
+          const done   = step > i;
+          return (
+            <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '8px 12px', borderRadius: 8,
+              background: active ? s.color + '15' : done ? 'var(--ifm-color-emphasis-100)' : 'transparent',
+              border: `2px solid ${active ? s.color : done ? s.color + '55' : 'var(--ifm-color-emphasis-200)'}`,
+              transition: 'all 0.25s' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, flexShrink: 0 }}>
+                <div style={{ width: 24, height: 24, borderRadius: '50%', background: done || active ? s.color : 'var(--ifm-color-emphasis-200)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, fontSize: 10 }}>
+                  {done ? '✓' : i + 1}
+                </div>
+                <span style={{ fontSize: 8, padding: '1px 4px', borderRadius: 3, background: sideBg[s.side], color: sideColor[s.side], fontWeight: 700, whiteSpace: 'nowrap' }}>{sideLabel[s.side]}</span>
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 700, fontSize: 12, color: active ? s.color : 'var(--ifm-font-color-base)', fontFamily: 'monospace' }}>{s.label}</div>
+                {(active || done) && <div style={{ fontSize: 11, color: 'var(--ifm-color-secondary-darkest)', marginTop: 2 }}>{s.desc}</div>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+export function ParamBindingCompare() {
+  const [active, setActive] = useState('direct');
+
+  const tabs = [
+    {
+      id: 'direct',
+      label: '직접 파라미터',
+      noteColor: '#f59e0b',
+      form: `<form action="/user/join" method="post">
+  <input name="name" />
+  <input name="age" type="number" />
+  <button>가입</button>
+</form>`,
+      controller: `@PostMapping("/join")
+public String join(String name, int age, Model model) {
+    // 파라미터명 = 변수명이면 스프링이 자동 바인딩
+    model.addAttribute("name", name);
+    return "joinResult";
+}`,
+      note: 'int 같은 원시 타입은 파라미터 누락 시 400 오류. String은 null로 들어오므로 null 체크 필요.',
+    },
+    {
+      id: 'dto',
+      label: 'DTO 오토바인딩',
+      noteColor: '#10b981',
+      form: `<form action="/user/join" method="post">
+  <!-- name 속성 = DTO setter 이름 -->
+  <input name="name" />   <!-- → setName() 호출 -->
+  <input name="age" />    <!-- → setAge() 호출 -->
+  <button>가입</button>
+</form>`,
+      controller: `@PostMapping("/join")
+public String join(UserDTO userDto, Model model) {
+    // 폼 name 속성 = DTO 프로퍼티명 → setter 자동 호출
+    // 형변환(String→int)도 스프링이 처리
+    model.addAttribute("dto", userDto);
+    return "joinResult";
+}`,
+      note: 'DTO에 setter가 반드시 있어야 합니다. Lombok @Setter 또는 @Data로 자동 생성 권장.',
+    },
+    {
+      id: 'map',
+      label: '@RequestParam Map',
+      noteColor: '#6366f1',
+      form: `<form action="/user/join" method="post">
+  <input name="name" />
+  <input name="age" />
+  <input name="email" />  <!-- 필드가 많아도 코드 변경 없음 -->
+  <button>가입</button>
+</form>`,
+      controller: `@PostMapping("/join")
+public String join(
+    @RequestParam Map<String, Object> params,
+    Model model
+) {
+    // 폼 name 속성 → Map 키
+    // 값은 모두 String → 수동 형변환 필요
+    String name = (String) params.get("name");
+    model.addAttribute("params", params);
+    return "joinResult";
+}`,
+      note: '입력 필드가 동적이거나 일부만 받을 때 유용. 단, 값은 String 타입으로만 들어오므로 형변환 필수.',
+    },
+    {
+      id: 'requestparam',
+      label: '@RequestParam 옵션',
+      noteColor: '#0891b2',
+      form: `<!-- 페이징 + 검색 폼 -->
+<form action="/board/list" method="get">
+  <!-- page 없으면 기본값 1 적용 -->
+  <!-- keyword는 선택 입력 (없어도 OK) -->
+  <input name="keyword" placeholder="검색어" />
+  <button>검색</button>
+</form>`,
+      controller: `@GetMapping("/list")
+public String list(
+    @RequestParam(defaultValue = "1") int page,
+    @RequestParam(required = false) String keyword,
+    Model model
+) {
+    // page: 누락 시 1 / keyword: 누락 시 null
+    model.addAttribute("list",
+        boardService.getList(page, keyword));
+    return "board/list";
+}`,
+      note: 'defaultValue는 문자열로 지정하지만 자동 타입 변환됩니다. 페이징처럼 기본값이 있는 파라미터에 필수.',
+    },
+  ];
+
+  const tab = tabs.find(t => t.id === active);
+
+  return (
+    <div style={{ border: '1px solid var(--ifm-color-emphasis-300)', borderRadius: 10, overflow: 'hidden', marginBottom: 24 }}>
+      <div style={{ display: 'flex', background: 'var(--ifm-color-emphasis-100)', borderBottom: '1px solid var(--ifm-color-emphasis-300)', flexWrap: 'wrap' }}>
+        {tabs.map(t => (
+          <button key={t.id} onClick={() => setActive(t.id)}
+            style={{ padding: '10px 16px', border: 'none', borderBottom: active === t.id ? '3px solid var(--ifm-color-primary)' : '3px solid transparent', background: 'none', color: active === t.id ? 'var(--ifm-color-primary)' : 'var(--ifm-color-secondary-darkest)', fontWeight: active === t.id ? 700 : 400, cursor: 'pointer', fontSize: 12, fontFamily: 'monospace' }}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+      <div style={{ padding: 16 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#6b7280', marginBottom: 5 }}>HTML Form</div>
+            <pre style={{ background: '#1e1e2e', color: '#cdd6f4', padding: 12, borderRadius: 8, fontSize: 11, margin: 0, overflowX: 'auto', minHeight: 140 }}><code>{tab.form}</code></pre>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#059669', marginBottom: 5 }}>Controller</div>
+            <pre style={{ background: '#0f2417', color: '#86efac', padding: 12, borderRadius: 8, fontSize: 11, margin: 0, overflowX: 'auto', minHeight: 140 }}><code>{tab.controller}</code></pre>
+          </div>
+        </div>
+        <div style={{ marginTop: 10, padding: '8px 12px', background: 'var(--ifm-color-emphasis-100)', borderRadius: 6, fontSize: 12, color: 'var(--ifm-color-secondary-darkest)', borderLeft: `3px solid ${tab.noteColor}` }}>
+          {tab.note}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function RedirectDemo() {
+  const [mode, setMode] = useState('forward');
+  const [step, setStep] = useState(-1);
+  const [running, setRunning] = useState(false);
+  const timerRef = useRef(null);
+
+  const scenarios = {
+    forward: {
+      label: '포워드 (return "뷰이름")',
+      color: '#10b981',
+      steps: [
+        { label: 'POST /board/save', desc: '폼 제출 요청', side: 'browser' },
+        { label: 'model.addAttribute("msg", "저장완료")', desc: '모델에 결과 메시지 담기', side: 'spring' },
+        { label: 'return "board/result"', desc: '같은 요청-응답 안에서 뷰 렌더링 (내부 포워드)', side: 'spring' },
+        { label: 'board/result.html 렌더링', desc: '${msg} → "저장완료" ✅  데이터 정상 출력', side: 'view' },
+      ],
+      resultOk: true,
+      result: '성공: Model 데이터가 뷰에 그대로 전달됩니다.',
+      note: 'URL은 /board/save로 유지됩니다 (주소창 변경 없음). 새로고침 시 POST 재전송 경고가 발생합니다.',
+    },
+    redirect_model: {
+      label: 'redirect: + Model (❌ 데이터 손실)',
+      color: '#ef4444',
+      steps: [
+        { label: 'POST /board/save', desc: '폼 제출 요청', side: 'browser' },
+        { label: 'model.addAttribute("msg", "저장완료")', desc: '모델에 담기 — 하지만 이 요청은 곧 끊깁니다', side: 'spring' },
+        { label: 'return "redirect:/board/list"', desc: '302 응답 → 브라우저에게 새 주소로 재요청하도록 지시', side: 'spring' },
+        { label: 'GET /board/list (새 HTTP 요청)', desc: '새 요청 — 이전 Model 데이터는 완전히 사라짐', side: 'browser' },
+        { label: 'board/list.html 렌더링', desc: '${msg} → null  ❌  데이터 없음', side: 'view' },
+      ],
+      resultOk: false,
+      result: '실패: 리다이렉트 후 Model 데이터가 사라집니다.',
+      note: '리다이렉트는 새 HTTP 요청이므로 이전 요청의 Model은 유지되지 않습니다. 가장 흔한 실수 중 하나입니다.',
+    },
+    redirect_attrs: {
+      label: 'RedirectAttributes (✅ 쿼리스트링 전달)',
+      color: '#3b82f6',
+      steps: [
+        { label: 'POST /board/save', desc: '폼 제출 요청', side: 'browser' },
+        { label: 'redirectAttrs.addAttribute("msg", "저장완료")', desc: 'RedirectAttributes에 담기 → 쿼리스트링 변환 예약', side: 'spring' },
+        { label: 'return "redirect:/board/list"', desc: '302 응답 + 쿼리스트링 자동 추가', side: 'spring' },
+        { label: 'GET /board/list?msg=저장완료', desc: '쿼리스트링으로 데이터가 전달됩니다', side: 'browser' },
+        { label: 'board/list.html 렌더링', desc: '@RequestParam으로 받아 Model에 담으면 ${msg} 출력 가능 ✅', side: 'view' },
+      ],
+      resultOk: true,
+      result: '성공: 쿼리스트링으로 리다이렉트 후에도 데이터 전달 가능합니다.',
+      note: '민감한 데이터(비밀번호 등)는 URL에 노출되므로 부적합. 일회성 메시지는 addFlashAttribute()를 사용하면 세션을 통해 한 번만 전달됩니다.',
+    },
+  };
+
+  const sc = scenarios[mode];
+  const sideColor = { browser: '#3b82f6', spring: '#8b5cf6', view: '#f59e0b' };
+  const sideLabel = { browser: '브라우저', spring: 'Spring', view: 'View' };
+  const sideBg   = { browser: '#eff6ff', spring: '#f5f3ff', view: '#fffbeb' };
+
+  const run = () => {
+    if (running) return;
+    setStep(-1);
+    setRunning(true);
+    let i = 0;
+    const tick = () => {
+      setStep(i++);
+      if (i < sc.steps.length) timerRef.current = setTimeout(tick, 650);
+      else setRunning(false);
+    };
+    timerRef.current = setTimeout(tick, 200);
+  };
+
+  useEffect(() => {
+    clearTimeout(timerRef.current);
+    setStep(-1);
+    setRunning(false);
+  }, [mode]);
+
+  useEffect(() => () => clearTimeout(timerRef.current), []);
+
+  return (
+    <div style={{ border: '1px solid var(--ifm-color-emphasis-300)', borderRadius: 10, overflow: 'hidden', marginBottom: 24 }}>
+      <div style={{ padding: '12px 16px', background: 'var(--ifm-color-emphasis-100)', borderBottom: '1px solid var(--ifm-color-emphasis-300)' }}>
+        <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 8 }}>시나리오 선택:</div>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {Object.entries(scenarios).map(([k, v]) => (
+            <button key={k} onClick={() => setMode(k)}
+              style={{ padding: '5px 12px', borderRadius: 6, border: `1.5px solid ${v.color}`, background: mode === k ? v.color : 'transparent', color: mode === k ? '#fff' : v.color, cursor: 'pointer', fontWeight: 600, fontSize: 11 }}>
+              {v.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ padding: '10px 16px', display: 'flex', justifyContent: 'flex-end', gap: 8, borderBottom: '1px solid var(--ifm-color-emphasis-200)' }}>
+        <button onClick={() => { clearTimeout(timerRef.current); setStep(-1); setRunning(false); }}
+          style={{ padding: '4px 12px', borderRadius: 6, background: 'transparent', border: '1px solid var(--ifm-color-emphasis-400)', color: 'var(--ifm-font-color-base)', cursor: 'pointer', fontSize: 11 }}>
+          초기화
+        </button>
+        <button onClick={run} disabled={running}
+          style={{ padding: '6px 16px', borderRadius: 6, background: running ? '#6b7280' : 'var(--ifm-color-primary)', color: '#fff', border: 'none', cursor: running ? 'default' : 'pointer', fontWeight: 700, fontSize: 12 }}>
+          {running ? '실행 중...' : '▶ 흐름 실행'}
+        </button>
+      </div>
+
+      <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {sc.steps.map((s, i) => {
+          const active = step === i;
+          const done   = step > i;
+          return (
+            <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '9px 12px', borderRadius: 8,
+              background: active ? sc.color + '15' : done ? 'var(--ifm-color-emphasis-100)' : 'transparent',
+              border: `2px solid ${active ? sc.color : done ? sc.color + '55' : 'var(--ifm-color-emphasis-200)'}`,
+              transition: 'all 0.3s' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, flexShrink: 0 }}>
+                <div style={{ width: 24, height: 24, borderRadius: '50%', background: done || active ? sc.color : 'var(--ifm-color-emphasis-200)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, fontSize: 10 }}>
+                  {done ? '✓' : i + 1}
+                </div>
+                <span style={{ fontSize: 8, padding: '1px 4px', borderRadius: 3, background: sideBg[s.side], color: sideColor[s.side], fontWeight: 700, whiteSpace: 'nowrap' }}>{sideLabel[s.side]}</span>
+              </div>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 12, color: active ? sc.color : 'var(--ifm-font-color-base)', fontFamily: 'monospace' }}>{s.label}</div>
+                {(active || done) && <div style={{ fontSize: 11, color: 'var(--ifm-color-secondary-darkest)', marginTop: 2 }}>{s.desc}</div>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {step >= sc.steps.length - 1 && (
+        <div style={{ margin: '0 16px 16px', padding: '10px 14px', borderRadius: 8, background: sc.resultOk ? '#d1fae5' : '#fee2e2', border: `1px solid ${sc.resultOk ? '#6ee7b7' : '#fca5a5'}` }}>
+          <strong style={{ fontSize: 13, color: sc.resultOk ? '#065f46' : '#991b1b' }}>{sc.result}</strong>
+          <p style={{ margin: '5px 0 0', fontSize: 11, color: sc.resultOk ? '#065f46' : '#991b1b' }}>{sc.note}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function VoidReturnTester() {
+  const [classPath, setClassPath] = useState('/user');
+  const [methodName, setMethodName] = useState('login');
+
+  const cleanClass = classPath.startsWith('/') ? classPath.slice(1) : classPath;
+  const viewName = cleanClass ? `${cleanClass}/${methodName}` : methodName;
+  const templatePath = `templates/${viewName}.html`;
+
+  const examples = [
+    { classPath: '/user', methodName: 'login', desc: '로그인' },
+    { classPath: '/user', methodName: 'myPage', desc: '마이페이지' },
+    { classPath: '/board', methodName: 'list', desc: '게시판 목록' },
+    { classPath: '/board', methodName: 'detail', desc: '게시글 상세' },
+    { classPath: '', methodName: 'index', desc: '홈 화면' },
+  ];
+
+  return (
+    <div style={{ border: '1px solid var(--ifm-color-emphasis-300)', borderRadius: 10, overflow: 'hidden', marginBottom: 24 }}>
+      <div style={{ padding: '12px 16px', background: 'var(--ifm-color-emphasis-100)', borderBottom: '1px solid var(--ifm-color-emphasis-300)', fontWeight: 700, fontSize: 13 }}>
+        void 반환 뷰 경로 계산기
+      </div>
+      <div style={{ padding: 16 }}>
+        <div style={{ display: 'flex', gap: 12, marginBottom: 14, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <div>
+            <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4, fontWeight: 600 }}>클래스 레벨 @RequestMapping</div>
+            <input value={classPath} onChange={e => setClassPath(e.target.value)} placeholder="/user"
+              style={{ padding: '7px 10px', border: '1px solid var(--ifm-color-emphasis-400)', borderRadius: 6, fontFamily: 'monospace', fontSize: 13, width: 160, background: 'var(--ifm-background-color)', color: 'var(--ifm-font-color-base)' }} />
+          </div>
+          <div style={{ fontSize: 20, color: '#6b7280', paddingBottom: 2 }}>+</div>
+          <div>
+            <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4, fontWeight: 600 }}>메소드명 (반환 타입: void)</div>
+            <input value={methodName} onChange={e => setMethodName(e.target.value)} placeholder="login"
+              style={{ padding: '7px 10px', border: '1px solid var(--ifm-color-emphasis-400)', borderRadius: 6, fontFamily: 'monospace', fontSize: 13, width: 150, background: 'var(--ifm-background-color)', color: 'var(--ifm-font-color-base)' }} />
+          </div>
+        </div>
+
+        <div style={{ background: 'var(--ifm-color-emphasis-100)', borderRadius: 8, padding: '12px 16px', marginBottom: 12 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: '#6b7280' }}>URL 경로</span>
+            <code style={{ fontSize: 13 }}>{classPath}/{methodName}</code>
+            <span style={{ color: '#6b7280', fontSize: 16 }}>→</span>
+            <span style={{ fontSize: 11, fontWeight: 700, color: '#6b7280' }}>뷰 이름</span>
+            <code style={{ fontSize: 13, color: 'var(--ifm-color-primary)', fontWeight: 700 }}>{viewName}</code>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: '#059669' }}>템플릿 경로</span>
+            <code style={{ fontSize: 13, color: '#059669' }}>{templatePath}</code>
+          </div>
+        </div>
+
+        <div style={{ fontSize: 11, fontWeight: 700, color: '#6b7280', marginBottom: 6 }}>예시 클릭:</div>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {examples.map((ex, i) => (
+            <button key={i} onClick={() => { setClassPath(ex.classPath); setMethodName(ex.methodName); }}
+              style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid var(--ifm-color-emphasis-400)', background: 'transparent', color: 'var(--ifm-font-color-base)', cursor: 'pointer', fontSize: 11, fontFamily: 'monospace' }}>
+              {ex.desc}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+Spring MVC 컨트롤러의 요청 처리 핵심 — **디스패처 서블릿 전체 흐름, 파라미터 바인딩 4가지 패턴, void 반환 뷰 결정 규칙, 리다이렉트 값 전달 전략, `@PathVariable`** — 을 인터랙티브 시뮬레이터로 정리합니다.
+
+<!-- truncate -->
+
+## Spring MVC 요청 처리 전체 흐름
+
+요청 하나가 들어와서 HTML로 응답하기까지, 스프링 내부에서 어떤 컴포넌트가 어떤 순서로 동작하는지 직접 확인해보세요.
+
+<MVCFlowViz />
+
+핵심은 **DispatcherServlet이 모든 요청의 중앙 관제소**라는 점입니다. 요청을 직접 처리하지 않고 HandlerMapping → HandlerAdapter → Controller → ViewResolver로 위임합니다. 이 구조 덕분에 컨트롤러 코드는 HTTP 처리 세부사항을 알 필요가 없습니다.
+
+---
+
+## 컨트롤러 기초: @Value, @GetMapping, Model
+
+### @Value — 설정값 주입
+
+소스코드에 하드코딩 대신 `application.properties`에서 값을 읽어옵니다.
+
+```java
+// application.properties
+app.title=Spring Board
+
+// Controller
+@Value("${app.title}")
+private String appTitle;
+
+@GetMapping("/")
+public String index(Model model) {
+    model.addAttribute("title", appTitle);
+    return "index";
+}
+```
+
+### Model vs HttpServletRequest
+
+| 항목 | `Model` | `HttpServletRequest` |
+|---|---|---|
+| 소속 | Spring MVC | Jakarta Servlet (톰캣 계층) |
+| 사용 목적 | 뷰에 데이터 전달 | 요청 정보 직접 접근 |
+| 코드 의존성 | Spring에만 의존 | Servlet API에 의존 |
+| 권장 여부 | ✅ 컨트롤러에서 권장 | 필터/인터셉터에서 직접 사용 |
+
+> `Model`은 내부적으로 `HttpServletRequest`의 attribute로 변환되어 뷰로 전달됩니다. 같은 동작이지만 Spring 방식이 더 테스트하기 쉽습니다.
+
+---
+
+## void 반환 시 뷰 이름 결정 규칙
+
+반환 타입이 `void`이면 스프링은 **요청 URL 경로**를 뷰 이름으로 사용합니다. 메소드명이 URL 마지막 세그먼트와 같을 때 "메소드명 = 뷰 이름"처럼 보이는 이유가 이것입니다.
+
+<VoidReturnTester />
+
+```java
+@Controller
+@RequestMapping("/user")  // 클래스 레벨
+public class UserController {
+
+    // URL: /user/login → 뷰 이름: user/login → templates/user/login.html
+    @GetMapping("/login")
+    public void login(Model model) {
+        model.addAttribute("msg", "로그인 페이지입니다.");
+        // return 없음 → URL 경로로 뷰 탐색
+    }
+}
+```
+
+> 회사 코드에서 `void` 반환이 보인다면 "뷰가 없는 것이 아니라 뷰 이름 결정 방식이 다를 뿐"이라고 이해하면 됩니다.
+
+---
+
+## 파라미터 바인딩 4가지 패턴
+
+폼/쿼리스트링 값을 컨트롤러에서 받는 방법은 상황에 따라 다릅니다.
+
+<ParamBindingCompare />
+
+### 다중값 바인딩 — 체크박스
+
+```java
+// 체크박스 다중 선택: name="hobby" value="read", "swim", "code"
+@PostMapping("/profile")
+public String profile(
+    @RequestParam(value = "hobby", required = false) List<String> hobbies,
+    Model model
+) {
+    // 과거: request.getParameterValues("hobby") → String[]
+    // 스프링: List<String>으로 직접 바인딩
+    model.addAttribute("hobbies", hobbies);
+    return "profile";
+}
+```
+
+### DTO vs Map 선택 기준
+
+| 상황 | 권장 방식 |
+|---|---|
+| 입력 필드가 정해진 폼 | DTO 오토바인딩 (구조화, 재사용 용이) |
+| 필드가 동적이거나 일부만 입력 | `@RequestParam Map` |
+| 페이징/검색처럼 기본값 필요 | `@RequestParam` + `defaultValue` |
+| MyBatis parameterType 미지정 시 | DTO, Map 둘 다 동작 |
+
+---
+
+## 엔드포인트 설계: 클래스 레벨 @RequestMapping
+
+클래스 레벨에 공통 경로를 두면 컨트롤러 단위로 URL 그룹이 명확해집니다.
+
+```java
+@Controller
+@RequestMapping("/user")  // 이 컨트롤러의 모든 URL은 /user/... 로 시작
+public class UserController {
+
+    @GetMapping("/login")     // /user/login GET
+    public void login() {}
+
+    @PostMapping("/login")    // /user/login POST
+    public String doLogin(UserDTO dto, RedirectAttributes attrs) {
+        // 로그인 처리 후 리다이렉트
+        attrs.addAttribute("name", dto.getName());
+        return "redirect:/user/myPage";
+    }
+
+    @GetMapping("/myPage")    // /user/myPage GET
+    public void myPage() {}
+}
+```
+
+### 경로 변수 설계 주의사항
+
+| 설계 | 문제 | 권장 여부 |
+|---|---|---|
+| `@GetMapping("/{action}")` | `/user/login2`, `/user/test`, `/user/abc` 등 **모든** 문자열 흡수 | ❌ 의도치 않은 매핑 |
+| `@GetMapping("/login")` 고정 경로 | 명확히 1:1 매핑, 예측 가능 | ✅ 기본 권장 |
+| `method={GET, POST}` 복수 메소드 | 한 메소드로 GET/POST 모두 처리 | 필요 시만 사용 |
+
+```java
+// 나쁜 예: /{action}은 모든 문자열을 잡아버림
+@GetMapping("/{action}")
+public String dispatch(@PathVariable String action) {
+    if ("login".equals(action)) return "user/login";
+    // ... 분기가 늘수록 유지보수 곤란
+}
+
+// 좋은 예: 명시적으로 분리
+@GetMapping("/login")
+public void login() {}
+
+@GetMapping("/logout")
+public String logout() { return "redirect:/"; }
+```
+
+---
+
+## 리다이렉트와 값 전달 전략
+
+리다이렉트 후 데이터를 전달하는 방법을 세 가지 시나리오로 비교해보세요.
+
+<RedirectDemo />
+
+### 코드 비교
+
+```java
+// ✅ RedirectAttributes.addAttribute() — 쿼리스트링 자동 변환
+@PostMapping("/save")
+public String save(BoardDTO dto, RedirectAttributes attrs) {
+    boardService.save(dto);
+    attrs.addAttribute("msg", "저장되었습니다.");
+    return "redirect:/board/list";
+    // → GET /board/list?msg=저장되었습니다.
+}
+
+// ✅ 직접 쿼리스트링 조합 — 간단하지만 가독성 떨어짐
+@PostMapping("/save")
+public String save(BoardDTO dto) {
+    int seq = boardService.save(dto);
+    return "redirect:/board/detail?seq=" + seq;
+}
+
+// ✅ addFlashAttribute() — 세션 경유, 한 번만 전달, URL 노출 없음
+@PostMapping("/save")
+public String save(BoardDTO dto, RedirectAttributes attrs) {
+    boardService.save(dto);
+    attrs.addFlashAttribute("msg", "저장되었습니다.");  // URL에 노출 안 됨
+    return "redirect:/board/list";
+}
+```
+
+---
+
+## @PathVariable — 경로 기반 값 바인딩
+
+`/users/{id}`처럼 경로 세그먼트를 변수로 받습니다. REST API 설계에서 리소스 식별자에 주로 사용됩니다.
+
+```java
+@Controller
+@RequestMapping("/board")
+public class BoardController {
+
+    // /board/detail/42 → seq = 42
+    @GetMapping("/detail/{seq}")
+    public String detail(@PathVariable int seq, Model model) {
+        model.addAttribute("board", boardService.getDetail(seq));
+        return "board/detail";
+    }
+
+    // 복수 경로 변수
+    // /board/2024/spring → year = 2024, category = "spring"
+    @GetMapping("/{year}/{category}")
+    public String archive(
+        @PathVariable int year,
+        @PathVariable String category,
+        Model model
+    ) {
+        model.addAttribute("list", boardService.getArchive(year, category));
+        return "board/archive";
+    }
+}
+```
+
+> **주의:** `/{category}` 같은 단일 변수를 인덱싱 위치(앞 세그먼트)에 두면 `/board/list`, `/board/save` 등 모든 요청을 흡수합니다. 경로 변수는 **후위 세그먼트**에서 필요한 범위만 사용하세요.
+
+---
+
+## 신규 프로젝트 구성 순서
+
+처음부터 프로젝트를 만들 때의 의존성과 설정 체크리스트입니다.
+
+```xml
+<!-- pom.xml 핵심 의존성 -->
+<dependency>spring-boot-starter-web</dependency>
+<dependency>spring-boot-starter-thymeleaf</dependency>
+<dependency>mybatis-spring-boot-starter</dependency>
+<dependency>ojdbc11</dependency>  <!-- 오라클 드라이버 -->
+<dependency>lombok</dependency>
+<dependency>spring-boot-starter-aop</dependency>
+```
+
+```properties
+# application.properties
+spring.datasource.driver-class-name=oracle.jdbc.OracleDriver
+spring.datasource.url=jdbc:oracle:thin:@localhost:1521:XE
+spring.datasource.username=hr
+spring.datasource.password=hr
+
+mybatis.type-aliases-package=com.min.edu.model.vo
+mybatis.mapper-locations=classpath:sql/**/*.xml
+```
+
+```java
+// DAO 호출 공통 로깅 AOP
+@Aspect @Component
+public class DaoLoggingAspect {
+
+    // *Dao로 끝나는 인터페이스의 모든 public 메소드 대상
+    @Pointcut("execution(public * ..*Dao.*(..))")
+    public void daoMethods() {}
+
+    @Before("daoMethods()")
+    public void logBefore(JoinPoint jp) {
+        log.info("[DAO] {} / args={}",
+            jp.getSignature().getName(),
+            Arrays.toString(jp.getArgs()));
+    }
+
+    @AfterReturning(pointcut = "daoMethods()", returning = "result")
+    public void logReturn(Object result) {
+        log.info("[DAO 반환] {}", result);
+    }
+
+    @AfterThrowing(pointcut = "daoMethods()", throwing = "e")
+    public void logException(Exception e) {
+        log.error("[DAO 예외] {}", e.getMessage());
+    }
+}
+```
+
+---
+
+## 한눈에 정리
+
+| 기술 | 핵심 포인트 |
+|---|---|
+| **DispatcherServlet** | 모든 요청 관문 → HandlerMapping → HandlerAdapter → Controller → ViewResolver 위임 |
+| **@Value** | `application.properties` 값을 필드에 주입, 소스 하드코딩 방지 |
+| **Model** | HttpServletRequest 위에서 동작하는 Spring MVC 뷰 데이터 컨테이너 |
+| **void 반환** | 요청 URL 경로 = 뷰 이름, 메소드명과 일치시키는 것이 관례 |
+| **DTO 오토바인딩** | 폼 name = DTO setter → 형변환 자동, setter 없으면 바인딩 실패 |
+| **@RequestParam 옵션** | `defaultValue`로 기본값, `required=false`로 선택 파라미터 처리 |
+| **redirect:** | 새 HTTP 요청 → Model 데이터 소멸, RedirectAttributes 또는 쿼리스트링으로 전달 |
+| **@PathVariable** | 경로 세그먼트를 변수로 바인딩, 앞 세그먼트 단독 변수는 모든 요청 흡수 주의 |
