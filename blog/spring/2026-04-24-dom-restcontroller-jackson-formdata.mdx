@@ -1,0 +1,1028 @@
+---
+title: "DOM 탐색 · @RestController·Jackson · FormData vs URLSearchParams 완전 정리"
+date: 2026-04-24
+authors: HyungJun
+tags: [Spring, Web, 기본기, 비동기]
+---
+
+import { useState, useEffect, useRef } from 'react';
+
+export function DOMTraversalExplorer() {
+  const [active, setActive] = useState(null);
+  const [removed, setRemoved] = useState(false);
+
+  useEffect(() => { if (active !== 'remove') setRemoved(false); }, [active]);
+
+  const methods = [
+    {
+      id: 'this',
+      label: 'this',
+      color: '#f59e0b',
+      desc: '이벤트 핸들러 안에서 this는 이벤트가 발생한 요소 자체입니다. 화살표 함수(=>)는 this를 바인딩하지 않으므로 function 키워드를 써야 합니다.',
+      result: '<button>복구</button>',
+      code: `button.addEventListener("click", function() {
+  console.log(this);
+  // ▶ <button>복구</button>
+
+  // ⚠️ 화살표 함수에서는 this가 다름
+  // () => { this } → 바깥 스코프의 this
+});`,
+      highlights: ['btn'],
+    },
+    {
+      id: 'closest',
+      label: 'closest("tr")',
+      color: '#3b82f6',
+      desc: '현재 요소에서 시작해 DOM 트리를 위로 올라가며 CSS 선택자와 일치하는 가장 가까운 조상(또는 자기 자신)을 반환합니다.',
+      result: '<tr>...</tr>  ← 버튼이 속한 행 전체',
+      code: `// 버튼 클릭 → 해당 행의 SEQ를 추출하는 패턴
+button.addEventListener("click", function() {
+  const tr = this.closest("tr");
+  // ▶ <tr><td>3</td><td>...</td></tr>
+
+  const seq = tr.children[0].textContent;
+  // ▶ "3"
+});`,
+      highlights: ['tr'],
+    },
+    {
+      id: 'children',
+      label: 'tr.children[0]',
+      color: '#10b981',
+      desc: 'children은 자식 Element 컬렉션입니다(텍스트 노드 제외). [0]으로 첫 번째 TD에 접근합니다. childNodes와 달리 태그 요소만 담겨 있어 인덱스 예측이 안정적입니다.',
+      result: '<td>3</td>  ← SEQ 칸',
+      code: `const tr = this.closest("tr");
+
+// children: HTMLCollection (Element만, 안전)
+const seqTd = tr.children[0];   // <td>3</td>
+const titTd = tr.children[1];   // <td>첫 번째 글</td>
+
+// childNodes: TextNode 포함 (비권장)
+// tr.childNodes[0] → TextNode (공백)
+// tr.childNodes[1] → <td>3</td>`,
+      highlights: ['td0'],
+    },
+    {
+      id: 'textContent',
+      label: '.textContent',
+      color: '#8b5cf6',
+      desc: '요소 내 텍스트만 추출합니다. HTML 태그를 포함하지 않으므로 XSS 위험 없이 순수 값을 가져올 때 적합합니다.',
+      result: '"3"  ← 문자열 (Number 변환 필요 시 parseInt)',
+      code: `const seq = tr.children[0].textContent;
+// ▶ "3" (string)
+
+// 숫자로 변환
+const seqNum = parseInt(seq, 10);  // 3 (number)
+
+// innerHTML과 차이
+td.textContent  // 순수 텍스트만 반환 (안전)
+td.innerHTML    // HTML 태그 포함 문자열 반환 (XSS 주의)`,
+      highlights: ['text0'],
+    },
+    {
+      id: 'querySelector',
+      label: 'querySelector(선택자)',
+      color: '#06b6d4',
+      desc: 'CSS 선택자로 첫 번째 일치 요소를 반환합니다. 특정 요소 내에서 호출하면 그 하위만 탐색합니다(범위 제한). querySelectorAll은 일치하는 전체 NodeList를 반환합니다.',
+      result: '선택자와 일치하는 첫 번째 요소',
+      code: `// 문서 전체에서 탐색
+document.querySelector("input[type='submit']");
+
+// tr 내부에서만 탐색 (범위 제한)
+tr.querySelector("td:nth-child(2)");
+// ▶ <td>첫 번째 글</td>
+
+// querySelectorAll: 전체 NodeList 반환
+document.querySelectorAll("input[type='text']");
+// ▶ NodeList(3) [input, input, input]`,
+      highlights: ['td1'],
+    },
+    {
+      id: 'qsaChecked',
+      label: ':checked 선택자',
+      color: '#f43f5e',
+      desc: '속성 선택자와 상태 선택자를 조합해 체크된 항목만 한 번에 가져옵니다. 기존 for문+if문 방식보다 간결하며 실무에서 다중 선택 처리의 표준 패턴입니다.',
+      result: 'NodeList  ← 체크된 체크박스들',
+      code: `// ❌ 기존 방식 — for문 순회 후 조건 필터
+const all = document.getElementsByName("chk");
+const selected = [];
+for (let i = 0; i < all.length; i++) {
+  if (all[i].checked) selected.push(all[i]);
+}
+
+// ✅ 개선 — 선택자 하나로 해결
+const selected = document.querySelectorAll(
+  "input[type='checkbox'][name='chk']:checked"
+);
+if (selected.length === 0) {
+  alert("선택된 항목이 없습니다."); return;
+}`,
+      highlights: ['checkboxes'],
+    },
+    {
+      id: 'remove',
+      label: 'tr.remove()',
+      color: '#ef4444',
+      desc: '해당 DOM 노드를 문서에서 완전히 제거합니다. 서버 요청 성공 후 화면 전체 리프레시 없이 해당 행만 사라지게 하는 SPA 핵심 패턴입니다.',
+      result: 'TR이 DOM에서 즉시 제거됨',
+      code: `const tr = this.closest("tr");
+const seq = tr.children[0].textContent;
+
+fetch("/recover?seq=" + seq)
+  .then(res => {
+    if (!res.ok) throw new Error(res.status);
+    return res.text();
+  })
+  .then(result => {
+    if (result === "true") {
+      tr.remove();  // 리프레시 없이 해당 행만 삭제
+    }
+  });`,
+      highlights: ['remove'],
+    },
+  ];
+
+  const m = methods.find(x => x.id === active);
+  const hl = (...ids) => m && ids.some(id => m.highlights.includes(id));
+  const hStyle = (color) => ({ outline: `2.5px solid ${color}`, background: color + '22', borderRadius: 4 });
+  const c = m?.color || '#6b7280';
+
+  return (
+    <div style={{ border: '1px solid var(--ifm-color-emphasis-300)', borderRadius: 10, overflow: 'hidden', marginBottom: 24 }}>
+      <div style={{ padding: '12px 14px', background: 'var(--ifm-color-emphasis-100)', borderBottom: '1px solid var(--ifm-color-emphasis-300)' }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: '#6b7280', marginBottom: 8 }}>탐색 방법 선택:</div>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {methods.map(x => (
+            <button key={x.id} onClick={() => setActive(x.id)}
+              style={{ padding: '4px 10px', borderRadius: 6, border: `1.5px solid ${x.color}`,
+                background: active === x.id ? x.color : 'transparent',
+                color: active === x.id ? '#fff' : x.color,
+                cursor: 'pointer', fontSize: 11, fontWeight: 700, fontFamily: 'monospace' }}>
+              {x.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--ifm-color-emphasis-200)' }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: '#6b7280', marginBottom: 10 }}>
+          DOM 구조 — 관리자 삭제글 복구 테이블 (첫 번째 행을 기준으로 탐색합니다)
+        </div>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, fontFamily: 'monospace' }}>
+            <thead>
+              <tr style={{ background: 'var(--ifm-color-emphasis-200)' }}>
+                {['SEQ', '제목', '작성자', '관리'].map(h => (
+                  <th key={h} style={{ padding: '6px 12px', border: '1px solid var(--ifm-color-emphasis-300)', textAlign: 'center', fontSize: 11 }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {!removed ? (
+                <tr style={{ ...(hl('tr') ? hStyle(c) : {}), transition: 'all 0.25s' }}>
+                  <td style={{ padding: '7px 12px', border: '1px solid var(--ifm-color-emphasis-300)', textAlign: 'center',
+                    ...(hl('td0') ? hStyle(c) : {}) }}>
+                    {hl('checkboxes') && <input type="checkbox" defaultChecked readOnly style={{ marginRight: 5 }} />}
+                    <span style={{ ...(hl('text0') ? { background: c, color: '#fff', borderRadius: 3, padding: '1px 4px' } : {}) }}>3</span>
+                  </td>
+                  <td style={{ padding: '7px 12px', border: '1px solid var(--ifm-color-emphasis-300)',
+                    ...(hl('td1') ? hStyle(c) : {}) }}>첫 번째 글</td>
+                  <td style={{ padding: '7px 12px', border: '1px solid var(--ifm-color-emphasis-300)', textAlign: 'center' }}>admin</td>
+                  <td style={{ padding: '7px 12px', border: '1px solid var(--ifm-color-emphasis-300)', textAlign: 'center' }}>
+                    <button style={{ padding: '3px 8px', borderRadius: 4, fontSize: 11, fontWeight: 600, cursor: 'pointer',
+                      border: `1.5px solid ${hl('btn', 'tr') ? c : '#9ca3af'}`,
+                      background: hl('btn') ? c : 'transparent',
+                      color: hl('btn') ? '#fff' : 'var(--ifm-font-color-base)',
+                      ...(hl('btn') ? hStyle(c) : {}), transition: 'all 0.2s' }}>
+                      복구
+                    </button>
+                  </td>
+                </tr>
+              ) : (
+                <tr>
+                  <td colSpan={4} style={{ padding: '10px', textAlign: 'center', color: '#ef4444', fontSize: 11,
+                    fontStyle: 'italic', border: '1px dashed #fca5a5', background: '#fee2e222' }}>
+                    tr.remove() 실행 → 이 행이 DOM에서 제거되었습니다 (화면 리프레시 없음)
+                  </td>
+                </tr>
+              )}
+              <tr>
+                <td style={{ padding: '7px 12px', border: '1px solid var(--ifm-color-emphasis-300)', textAlign: 'center' }}>
+                  {hl('checkboxes') && <input type="checkbox" readOnly style={{ marginRight: 5 }} />}2
+                </td>
+                <td style={{ padding: '7px 12px', border: '1px solid var(--ifm-color-emphasis-300)' }}>두 번째 글</td>
+                <td style={{ padding: '7px 12px', border: '1px solid var(--ifm-color-emphasis-300)', textAlign: 'center' }}>user1</td>
+                <td style={{ padding: '7px 12px', border: '1px solid var(--ifm-color-emphasis-300)', textAlign: 'center' }}>
+                  <button style={{ padding: '3px 8px', borderRadius: 4, border: '1.5px solid #9ca3af', background: 'transparent', color: 'var(--ifm-font-color-base)', cursor: 'pointer', fontSize: 11 }}>복구</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {m ? (
+        <div style={{ padding: '12px 16px' }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 10 }}>
+            <span style={{ padding: '3px 9px', borderRadius: 20, background: c + '20', color: c, fontSize: 11, fontWeight: 700, fontFamily: 'monospace', whiteSpace: 'nowrap' }}>{m.label}</span>
+            <span style={{ fontSize: 12, color: 'var(--ifm-color-secondary-darkest)', lineHeight: 1.5 }}>{m.desc}</span>
+          </div>
+          <div style={{ marginBottom: 10, padding: '6px 10px', borderRadius: 6, background: c + '15', border: `1px solid ${c}55`, fontSize: 12 }}>
+            <span style={{ fontWeight: 700, color: c, fontSize: 11 }}>반환값: </span>
+            <code style={{ color: c, fontFamily: 'monospace', fontSize: 11 }}>{m.result}</code>
+          </div>
+          <pre style={{ background: '#1e1e2e', color: '#cdd6f4', padding: 12, borderRadius: 8, fontSize: 11, margin: 0, overflowX: 'auto' }}>
+            <code>{m.code}</code>
+          </pre>
+          {m.id === 'remove' && (
+            <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
+              <button onClick={() => setRemoved(true)} disabled={removed}
+                style={{ padding: '5px 14px', borderRadius: 6, background: removed ? '#6b7280' : '#ef4444', color: '#fff', border: 'none', cursor: removed ? 'default' : 'pointer', fontSize: 11, fontWeight: 700 }}>
+                ▶ tr.remove() 실행해보기
+              </button>
+              {removed && (
+                <button onClick={() => setRemoved(false)}
+                  style={{ padding: '5px 14px', borderRadius: 6, background: 'transparent', color: '#ef4444', border: '1px solid #ef4444', cursor: 'pointer', fontSize: 11 }}>
+                  초기화
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      ) : (
+        <div style={{ padding: 16, textAlign: 'center', color: 'var(--ifm-color-secondary-darkest)', fontSize: 12, fontStyle: 'italic' }}>
+          위에서 탐색 방법을 선택하면 DOM의 어느 부분이 선택되는지 확인할 수 있습니다.
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function JacksonFlowViz() {
+  const [step, setStep] = useState(-1);
+  const [running, setRunning] = useState(false);
+  const timerRef = useRef(null);
+  const [activeAnnotation, setActiveAnnotation] = useState('restcontroller');
+
+  const javaCode = `public class UserVO {
+    private String id;    // "user01"
+    private String name;  // "홍길동"
+    @JsonIgnore
+    private String pw;    // 직렬화 제외
+    private String email; // "hong@test.com"
+    // getter/setter 필수!
+}`;
+
+  const jsonOutput = `{
+  "id": "user01",
+  "name": "홍길동",
+  "email": "hong@test.com"
+}`;
+
+  const pipelineSteps = [
+    {
+      label: '① Controller 메서드 반환',
+      color: '#3b82f6',
+      detail: `@RestController           // = @Controller + @ResponseBody
+@RequestMapping("/user")
+public class UserApiController {
+
+    @GetMapping("/{id}")
+    public UserVO getUser(@PathVariable String id) {
+        return userService.findById(id);
+        // UserVO 객체 반환 → View가 아닌 바디로 씀
+    }
+}`,
+      note: '@RestController가 붙으면 메서드 반환값을 ViewResolver로 넘기지 않고 HttpMessageConverter로 직접 씁니다.',
+    },
+    {
+      label: '② Content-Type 협상 (Content Negotiation)',
+      color: '#8b5cf6',
+      detail: `// 클라이언트 요청
+GET /user/user01 HTTP/1.1
+Accept: application/json      // ← 이 헤더가 핵심
+
+// Spring이 등록된 HttpMessageConverter 목록을 순회
+// → Accept 헤더와 반환 타입(UserVO)이 일치하는 컨버터 선택
+// → MappingJackson2HttpMessageConverter 선택됨`,
+      note: 'spring-boot-starter-web 의존성만 추가하면 Jackson이 자동 설정됩니다. Accept 헤더가 없으면 반환 타입에서 추론합니다.',
+    },
+    {
+      label: '③ ObjectMapper 직렬화',
+      color: '#10b981',
+      detail: `// Jackson의 ObjectMapper가 직렬화 수행
+ObjectMapper mapper = new ObjectMapper();
+
+// getter를 호출해 필드 값 추출 → JSON 생성
+String json = mapper.writeValueAsString(userVO);
+// {"id":"user01","name":"홍길동","email":"hong@test.com"}
+
+// @JsonIgnore 필드(pw)는 제외됨
+// @JsonProperty("userId") → 키 이름 변경 가능`,
+      note: 'Jackson은 public getter를 기반으로 직렬화합니다. getter가 없으면 해당 필드는 JSON에 포함되지 않습니다.',
+    },
+    {
+      label: '④ HTTP 응답 바디에 JSON 작성',
+      color: '#f59e0b',
+      detail: `// 생성된 JSON → HTTP 응답 바디에 기록
+HTTP/1.1 200 OK
+Content-Type: application/json;charset=UTF-8
+Content-Length: 55
+
+{"id":"user01","name":"홍길동","email":"hong@test.com"}
+
+// 클라이언트에서 파싱
+const data = await response.json();
+// ▶ { id: "user01", name: "홍길동", email: "hong@test.com" }`,
+      note: 'Content-Type: application/json 헤더도 자동으로 설정됩니다. 클라이언트는 response.json()으로 파싱합니다.',
+    },
+  ];
+
+  const annotations = [
+    {
+      id: 'restcontroller',
+      label: '@RestController',
+      color: '#3b82f6',
+      code: `// @RestController = @Controller + @ResponseBody 묶음
+// 클래스 전체 메서드에 @ResponseBody 적용
+
+@Controller           // View 반환
+public String list()  // "board/list" → 뷰 렌더링
+
+@RestController       // JSON/텍스트 반환
+public UserVO getUser() // UserVO → Jackson → JSON`,
+      note: '일반 @Controller에서 특정 메서드만 JSON으로 반환하려면 @ResponseBody를 메서드에 붙입니다. 클래스 전체가 REST라면 @RestController를 사용합니다.',
+    },
+    {
+      id: 'jsonignore',
+      label: '@JsonIgnore',
+      color: '#ef4444',
+      code: `public class UserVO {
+    private String id;
+    private String name;
+
+    @JsonIgnore   // 직렬화/역직렬화 모두 제외
+    private String pw;
+
+    // 직렬화만 제외하려면 (쓰기는 OK)
+    @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
+    private String pw;
+}`,
+      note: '비밀번호, 주민번호 등 민감한 필드는 반드시 @JsonIgnore로 응답 JSON에서 제외하세요.',
+    },
+    {
+      id: 'jsonproperty',
+      label: '@JsonProperty',
+      color: '#10b981',
+      code: `public class UserVO {
+    // Java: camelCase → JSON: snake_case
+    @JsonProperty("user_id")
+    private String userId;        // → "user_id"
+
+    @JsonProperty("created_at")
+    private LocalDateTime createdAt;  // → "created_at"
+
+    // 역직렬화 시 기본값 설정 가능
+    @JsonProperty(defaultValue = "ACTIVE")
+    private String status;
+}`,
+      note: '프론트엔드 컨벤션(snake_case)과 Java 컨벤션(camelCase)이 다를 때 @JsonProperty로 키 이름을 매핑합니다.',
+    },
+    {
+      id: 'gson',
+      label: 'Gson (수동 변환)',
+      color: '#f59e0b',
+      code: `// pom.xml
+// <dependency>
+//     <groupId>com.google.code.gson</groupId>
+//     <artifactId>gson</artifactId>
+// </dependency>
+
+// 수동 직렬화 (Jackson 자동 변환과 동일한 결과)
+@GetMapping("/user/{id}")
+@ResponseBody
+public String getUser(@PathVariable String id) {
+    UserVO user = userService.findById(id);
+    return new GsonBuilder().create().toJson(user);
+    // → {"id":"user01","name":"홍길동",...}
+}`,
+      note: 'Gson은 Jackson보다 설정이 단순하지만 Spring과의 통합이 Jackson만큼 자동화되어 있지 않습니다. 레거시 환경이나 간단한 변환에 사용합니다.',
+    },
+  ];
+
+  const run = () => {
+    if (running) return;
+    setStep(-1);
+    setRunning(true);
+    let i = 0;
+    const tick = () => {
+      setStep(i++);
+      if (i < pipelineSteps.length) timerRef.current = setTimeout(tick, 900);
+      else setRunning(false);
+    };
+    timerRef.current = setTimeout(tick, 300);
+  };
+
+  useEffect(() => () => clearTimeout(timerRef.current), []);
+
+  const ann = annotations.find(a => a.id === activeAnnotation);
+
+  return (
+    <div style={{ border: '1px solid var(--ifm-color-emphasis-300)', borderRadius: 10, overflow: 'hidden', marginBottom: 24 }}>
+      {/* Java ↔ JSON 헤더 */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', borderBottom: '1px solid var(--ifm-color-emphasis-200)' }}>
+        <div style={{ padding: '12px 14px', borderRight: '1px solid var(--ifm-color-emphasis-200)' }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#3b82f6', marginBottom: 6 }}>Java Object (UserVO)</div>
+          <pre style={{ background: '#0c1929', color: '#93c5fd', padding: 10, borderRadius: 8, fontSize: 10.5, margin: 0, overflowX: 'auto' }}>
+            <code>{javaCode}</code>
+          </pre>
+        </div>
+        <div style={{ padding: '12px 14px' }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#10b981', marginBottom: 6 }}>JSON 응답 결과</div>
+          <pre style={{ background: '#052e16', color: '#86efac', padding: 10, borderRadius: 8, fontSize: 10.5, margin: 0, overflowX: 'auto', minHeight: 92,
+            opacity: step >= 3 ? 1 : 0.2, transition: 'opacity 0.6s' }}>
+            <code>{jsonOutput}</code>
+          </pre>
+          {step >= 3 && (
+            <div style={{ marginTop: 5, fontSize: 11, color: '#059669', fontWeight: 600 }}>
+              ✓ Content-Type: application/json; charset=UTF-8
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* 실행 버튼 */}
+      <div style={{ padding: '8px 14px', display: 'flex', justifyContent: 'flex-end', gap: 8, background: 'var(--ifm-color-emphasis-100)', borderBottom: '1px solid var(--ifm-color-emphasis-200)' }}>
+        <button onClick={() => { clearTimeout(timerRef.current); setStep(-1); setRunning(false); }}
+          style={{ padding: '4px 12px', borderRadius: 6, background: 'transparent', border: '1px solid var(--ifm-color-emphasis-400)', color: 'var(--ifm-font-color-base)', cursor: 'pointer', fontSize: 11 }}>
+          초기화
+        </button>
+        <button onClick={run} disabled={running}
+          style={{ padding: '5px 14px', borderRadius: 6, background: running ? '#6b7280' : '#8b5cf6', color: '#fff', border: 'none', cursor: running ? 'default' : 'pointer', fontWeight: 700, fontSize: 12 }}>
+          {running ? 'Jackson 처리 중...' : '▶ 직렬화 파이프라인 실행'}
+        </button>
+      </div>
+
+      {/* 파이프라인 단계 */}
+      <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 6, borderBottom: '1px solid var(--ifm-color-emphasis-200)' }}>
+        {pipelineSteps.map((s, i) => {
+          const active = step === i;
+          const done = step > i;
+          return (
+            <div key={i} style={{ borderRadius: 8, border: `2px solid ${active || done ? s.color : 'var(--ifm-color-emphasis-200)'}`, background: active ? s.color + '12' : 'transparent', transition: 'all 0.3s', overflow: 'hidden' }}>
+              <div style={{ padding: '8px 12px', display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div style={{ width: 22, height: 22, borderRadius: '50%', flexShrink: 0, background: done || active ? s.color : 'var(--ifm-color-emphasis-200)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, fontSize: 10 }}>
+                  {done ? '✓' : i + 1}
+                </div>
+                <div style={{ fontWeight: done || active ? 700 : 400, fontSize: 12, color: active ? s.color : 'var(--ifm-font-color-base)' }}>
+                  {s.label}
+                </div>
+              </div>
+              {(active || done) && (
+                <div style={{ padding: '0 12px 10px 44px' }}>
+                  <pre style={{ background: '#1e1e2e', color: '#cdd6f4', padding: 8, borderRadius: 6, fontSize: 10.5, margin: '0 0 6px', overflowX: 'auto' }}>
+                    <code>{s.detail}</code>
+                  </pre>
+                  <div style={{ fontSize: 11, color: 'var(--ifm-color-secondary-darkest)', borderLeft: `2.5px solid ${s.color}`, paddingLeft: 8, lineHeight: 1.5 }}>
+                    {s.note}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Jackson 어노테이션 탭 */}
+      <div style={{ background: 'var(--ifm-color-emphasis-100)', borderBottom: '1px solid var(--ifm-color-emphasis-200)' }}>
+        <div style={{ padding: '10px 14px 0', fontSize: 11, fontWeight: 700, color: '#6b7280', marginBottom: 6 }}>Jackson 핵심 어노테이션 & 직렬화 옵션:</div>
+        <div style={{ display: 'flex', overflowX: 'auto' }}>
+          {annotations.map(a => (
+            <button key={a.id} onClick={() => setActiveAnnotation(a.id)}
+              style={{ padding: '8px 14px', border: 'none', borderBottom: activeAnnotation === a.id ? `3px solid ${a.color}` : '3px solid transparent', background: 'none', color: activeAnnotation === a.id ? a.color : 'var(--ifm-color-secondary-darkest)', fontWeight: activeAnnotation === a.id ? 700 : 400, cursor: 'pointer', fontSize: 12, whiteSpace: 'nowrap' }}>
+              {a.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div style={{ padding: 14 }}>
+        <pre style={{ background: '#1e1e2e', color: '#cdd6f4', padding: 12, borderRadius: 8, fontSize: 11, margin: '0 0 8px', overflowX: 'auto' }}>
+          <code>{ann.code}</code>
+        </pre>
+        <div style={{ fontSize: 12, color: 'var(--ifm-color-secondary-darkest)', borderLeft: `3px solid ${ann.color}`, paddingLeft: 10, lineHeight: 1.6 }}>
+          {ann.note}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function DataTransmitCompare() {
+  const [active, setActive] = useState('urlparams');
+
+  const tabs = [
+    {
+      id: 'urlparams',
+      label: 'URLSearchParams',
+      color: '#3b82f6',
+      contentType: 'application/x-www-form-urlencoded',
+      desc: '키=값&키=값 형태의 인코딩입니다. 일반 텍스트 데이터 전송에 사용하며, 파일 업로드는 불가합니다.',
+      when: ['텍스트 키-값 전송 (아이디 찾기, 검색, PATCH 수정)', '서버에서 @RequestParam으로 받는 API', '파일이 없는 모든 비동기 폼 전송'],
+      client: `// URLSearchParams: 키-값을 URL 인코딩 형식으로 묶음
+const params = new URLSearchParams();
+params.append("name", "홍길동");
+params.append("email", "hong@test.com");
+// 다중 값도 가능
+params.append("opt", "id");
+params.append("keyword", "hong");
+
+fetch("/findId", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/x-www-form-urlencoded"
+  },
+  body: params   // "name=%ED%99%8D%EA%B8%B8%EB%8F%99&email=hong%40test.com"
+})
+  .then(res => res.text())
+  .then(id => { /* id 출력 */ });`,
+      server: `// @RequestParam: 개별 파라미터 바인딩
+@PostMapping("/findId")
+@ResponseBody
+public String findId(@RequestParam String name,
+                     @RequestParam String email) {
+    return userService.findId(name, email);
+}
+
+// @RequestParam Map: 동적 파라미터 수신
+@PostMapping("/search")
+@ResponseBody
+public List<UserVO> search(
+        @RequestParam Map<String, Object> params) {
+    // params.get("opt"), params.get("keyword")
+    return userService.search(params);
+}
+
+// @ModelAttribute: VO 자동 바인딩
+@PostMapping("/join")
+public String join(@ModelAttribute UserVO vo) {
+    // vo.getName(), vo.getEmail() 자동 매핑
+    userService.save(vo);
+    return "redirect:/login";
+}`,
+    },
+    {
+      id: 'formdata',
+      label: 'FormData',
+      color: '#10b981',
+      contentType: 'multipart/form-data; boundary=----...',
+      desc: '파일을 포함한 멀티파트 폼 데이터입니다. Content-Type을 직접 지정하지 않아야 브라우저가 boundary를 자동 생성합니다.',
+      when: ['파일 업로드 (이미지, 문서, 첨부파일)', '파일 + 텍스트 데이터를 함께 전송할 때', 'multipart/form-data가 필요한 API 연동'],
+      client: `// FormData: 폼 전체 또는 수동 구성
+const form = document.querySelector("form");
+const formData = new FormData(form);
+// 폼의 name 속성으로 자동 수집
+
+// 또는 수동으로 값 추가
+const fd = new FormData();
+fd.append("title", "게시글 제목");
+fd.append("content", "내용");
+fd.append("file", fileInput.files[0]);  // 파일 추가
+
+fetch("/board/upload", {
+  method: "POST",
+  // ⚠️ Content-Type 헤더를 지정하지 않음!
+  // 브라우저가 multipart/form-data; boundary=...를 자동 설정
+  body: fd
+})
+  .then(res => res.json())
+  .then(result => { /* 처리 */ });`,
+      server: `// Spring: multipart/form-data 수신
+// pom.xml: spring-boot-starter-web 포함 시 기본 지원
+
+@PostMapping("/board/upload")
+@ResponseBody
+public ResponseEntity<Map<String,Object>> upload(
+        @RequestParam String title,
+        @RequestParam String content,
+        @RequestParam(required = false)
+            MultipartFile file) {
+
+    Map<String, Object> result = new HashMap<>();
+
+    if (file != null && !file.isEmpty()) {
+        String fileName = file.getOriginalFilename();
+        long size = file.getSize();
+        // file.transferTo(new File(uploadPath + fileName));
+        result.put("fileName", fileName);
+        result.put("size", size);
+    }
+
+    boardService.save(title, content);
+    result.put("success", true);
+    return ResponseEntity.ok(result);
+}
+
+// application.properties
+// spring.servlet.multipart.max-file-size=10MB
+// spring.servlet.multipart.max-request-size=20MB`,
+    },
+    {
+      id: 'jsonbody',
+      label: 'JSON Body',
+      color: '#8b5cf6',
+      contentType: 'application/json',
+      desc: 'JSON 문자열을 요청 바디에 담아 전송합니다. 중첩 객체, 배열 등 복잡한 구조를 자연스럽게 표현합니다. 서버는 @RequestBody로 수신합니다.',
+      when: ['REST API — 중첩 객체, 배열 등 복잡한 데이터 구조', 'SPA(React/Vue)에서 axios/fetch로 CRUD 요청', '@RequestBody로 받는 Spring REST API'],
+      client: `// JSON Body: 복잡한 객체 구조 전송에 적합
+const data = {
+  title: "게시글 제목",
+  content: "내용",
+  tags: ["java", "spring"],     // 배열
+  author: {
+    id: "user01",
+    name: "홍길동"              // 중첩 객체
+  }
+};
+
+fetch("/board", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json"  // 필수
+  },
+  body: JSON.stringify(data)    // 객체 → JSON 문자열
+})
+  .then(res => {
+    if (!res.ok) throw new Error(res.status);
+    return res.json();
+  })
+  .then(result => { /* result.id 등 */ });`,
+      server: `// @RequestBody: JSON → Java 객체 역직렬화 (Jackson 사용)
+@PostMapping("/board")
+public ResponseEntity<BoardVO> create(
+        @RequestBody BoardVO vo) {
+    // Jackson이 JSON을 BoardVO로 자동 변환
+    // vo.getTitle(), vo.getContent() 사용 가능
+
+    BoardVO saved = boardService.save(vo);
+    return ResponseEntity.ok(saved);
+}
+
+// 중첩 VO
+public class BoardVO {
+    private String title;
+    private String content;
+    private List<String> tags;  // 배열 자동 매핑
+    private AuthorVO author;    // 중첩 객체 자동 매핑
+}
+
+// ⚠️ @RequestBody + @RequestParam 혼용
+@PostMapping("/board/{id}")
+public BoardVO update(
+        @PathVariable Long id,           // URL 경로
+        @RequestParam String action,     // 쿼리스트링
+        @RequestBody BoardVO vo) {       // JSON 바디
+    return boardService.update(id, action, vo);
+}`,
+    },
+    {
+      id: 'when',
+      label: '언제 뭘 쓸까',
+      color: '#f59e0b',
+      contentType: '',
+      desc: '전송 방식 선택 기준을 정리합니다.',
+      when: [],
+      client: `// 1. 단순 텍스트 키-값 → URLSearchParams
+//    서버: @RequestParam, @ModelAttribute
+const p = new URLSearchParams();
+p.append("id", "user01");
+p.append("pw", "1234");
+fetch("/login", { method: "POST",
+  headers: { "Content-Type": "application/x-www-form-urlencoded" },
+  body: p });
+
+// 2. 파일 업로드 → FormData
+//    서버: @RequestParam MultipartFile
+const fd = new FormData();
+fd.append("file", input.files[0]);
+fetch("/upload", { method: "POST", body: fd });
+// ⚠️ Content-Type 헤더 직접 지정 금지!
+
+// 3. 복잡한 구조 / REST API → JSON Body
+//    서버: @RequestBody
+fetch("/order", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    items: [{ id: 1, qty: 2 }],
+    address: { city: "서울" }
+  })
+});`,
+      server: `// ┌─────────────────────────────────────────┐
+// │          전송 방식 선택 기준               │
+// └─────────────────────────────────────────┘
+//
+// Content-Type                    서버 어노테이션
+// ─────────────────────────────────────────────
+// application/x-www-form-urlencoded  @RequestParam
+//                                    @ModelAttribute
+//
+// multipart/form-data               @RequestParam MultipartFile
+//                                   @ModelAttribute (파일 제외)
+//
+// application/json                  @RequestBody
+//
+// ─────────────────────────────────────────────
+//
+// 주의: FormData에서 Content-Type 직접 지정하면
+//        boundary가 빠져 서버에서 파싱 실패
+//
+// 주의: URLSearchParams를 쓰면서
+//        application/json 헤더 지정하면 서버 파싱 실패
+//
+// 결론:
+//   파일 없는 키-값  → URLSearchParams (x-www-form-urlencoded)
+//   파일 포함        → FormData       (multipart/form-data)
+//   복잡한 구조      → JSON.stringify (application/json)`,
+    },
+  ];
+
+  const tab = tabs.find(t => t.id === active);
+
+  return (
+    <div style={{ border: '1px solid var(--ifm-color-emphasis-300)', borderRadius: 10, overflow: 'hidden', marginBottom: 24 }}>
+      <div style={{ display: 'flex', background: 'var(--ifm-color-emphasis-100)', borderBottom: '1px solid var(--ifm-color-emphasis-300)', overflowX: 'auto' }}>
+        {tabs.map(t => (
+          <button key={t.id} onClick={() => setActive(t.id)}
+            style={{ padding: '10px 16px', border: 'none', borderBottom: active === t.id ? `3px solid ${t.color}` : '3px solid transparent',
+              background: 'none', color: active === t.id ? t.color : 'var(--ifm-color-secondary-darkest)',
+              fontWeight: active === t.id ? 700 : 400, cursor: 'pointer', fontSize: 12, whiteSpace: 'nowrap' }}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {tab.contentType && (
+        <div style={{ padding: '8px 14px', background: tab.color + '12', borderBottom: '1px solid var(--ifm-color-emphasis-200)', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 11, color: '#6b7280', fontWeight: 600 }}>Content-Type:</span>
+          <code style={{ fontSize: 11, color: tab.color, fontFamily: 'monospace', fontWeight: 700 }}>{tab.contentType}</code>
+        </div>
+      )}
+
+      <div style={{ padding: '10px 14px 4px', borderBottom: '1px solid var(--ifm-color-emphasis-200)' }}>
+        <p style={{ margin: '0 0 8px', fontSize: 12, color: 'var(--ifm-color-secondary-darkest)' }}>{tab.desc}</p>
+        {tab.when.length > 0 && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {tab.when.map((w, i) => (
+              <span key={i} style={{ padding: '2px 8px', borderRadius: 20, background: tab.color + '18', color: tab.color, fontSize: 11, fontWeight: 600 }}>
+                ✓ {w}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0 }}>
+        <div style={{ padding: '12px 14px', borderRight: '1px solid var(--ifm-color-emphasis-200)' }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#f59e0b', marginBottom: 6 }}>Client (JavaScript)</div>
+          <pre style={{ background: '#1c1400', color: '#fde68a', padding: 11, borderRadius: 8, fontSize: 10.5, margin: 0, overflowX: 'auto', minHeight: 180 }}>
+            <code>{tab.client}</code>
+          </pre>
+        </div>
+        <div style={{ padding: '12px 14px' }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#22c55e', marginBottom: 6 }}>Server (Spring)</div>
+          <pre style={{ background: '#0f2417', color: '#86efac', padding: 11, borderRadius: 8, fontSize: 10.5, margin: 0, overflowX: 'auto', minHeight: 180 }}>
+            <code>{tab.server}</code>
+          </pre>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+비동기 통신의 세 가지 핵심 — **DOM 탐색**, **@RestController·Jackson 직렬화 흐름**, **데이터 전송 방식(FormData·URLSearchParams·JSON Body)** — 을 코드와 인터랙티브 시각화로 정리합니다.
+
+<!-- truncate -->
+
+## DOM 탐색 완전 정리
+
+게시판 관리 화면에서 "복구" 버튼을 클릭해 해당 행의 SEQ를 추출하고 tr을 제거하는 흐름이 DOM 탐색의 집약입니다. 아래 컴포넌트에서 각 탐색 방법을 직접 확인하세요.
+
+<DOMTraversalExplorer />
+
+### getElementById vs querySelector — 언제 뭘 쓸까
+
+| 방법 | 탐색 기준 | 반환 | 특징 |
+|---|---|---|---|
+| `getElementById("id")` | id 속성 | Element or null | 가장 빠름, id는 문서에서 유일해야 합니다. |
+| `getElementsByName("name")` | name 속성 | HTMLCollection | `<input name="chk">` 같은 다중 요소 탐색 시 사용합니다. |
+| `getElementsByClassName("cls")` | class 속성 | HTMLCollection | 동적으로 변경되지만 NodeList보다 느립니다. |
+| `querySelector("CSS선택자")` | CSS 선택자 | Element or null | 가장 유연함, 첫 번째 일치 요소만 반환합니다. |
+| `querySelectorAll("CSS선택자")` | CSS 선택자 | NodeList(정적) | 일치하는 전체 반환, 스냅샷이므로 DOM 변경 반영 안 됩니다. |
+| `closest("CSS선택자")` | 조상 탐색 | Element or null | 자신부터 위로 올라가며 탐색합니다. |
+
+```javascript
+// ✅ 실무 패턴 — 체크박스 다중 선택 + SEQ 추출
+document.querySelector("button.deleteAll")
+  .addEventListener("click", function() {
+    // 1. 체크된 항목 탐색
+    const checked = document.querySelectorAll(
+      "input[type='checkbox'][name='chkVal']:checked"
+    );
+    if (checked.length === 0) {
+      alert("삭제할 항목을 선택하세요."); return;
+    }
+
+    // 2. SEQ 값 수집
+    const seqs = [...checked].map(cb =>
+      cb.closest("tr").children[0].textContent.trim()
+    );
+
+    // 3. URLSearchParams로 묶어 전송
+    const params = new URLSearchParams();
+    seqs.forEach(seq => params.append("chkVal", seq));
+    location.href = "/multiDelete?" + params.toString();
+  });
+```
+
+> `getElementsByName`이 반환하는 `HTMLCollection`은 for-of나 `[...spread]`로 순회할 수 있지만, `querySelectorAll`의 `NodeList`가 `forEach`를 직접 지원해 더 편리합니다.
+
+---
+
+## @RestController와 Jackson 직렬화 흐름
+
+`@RestController`가 붙으면 메서드 반환값은 ViewResolver가 아닌 `HttpMessageConverter`로 전달됩니다. Spring Boot는 Jackson을 기본 컨버터로 등록해 Java 객체를 JSON으로 자동 직렬화합니다.
+
+<JacksonFlowViz />
+
+### @Controller vs @RestController 구조 비교
+
+```java
+// @Controller: 반환값 → ViewResolver → 템플릿 렌더링
+@Controller
+public class BoardController {
+
+    @GetMapping("/board/list")
+    public String list(Model model) {
+        model.addAttribute("boards", boardService.getAll());
+        return "board/list";  // → templates/board/list.html
+    }
+
+    // 특정 메서드만 JSON 반환 시 @ResponseBody 추가
+    @GetMapping("/board/count")
+    @ResponseBody
+    public int count() {
+        return boardService.count();  // → 42
+    }
+}
+
+// @RestController = @Controller + @ResponseBody (클래스 전체)
+@RestController
+@RequestMapping("/api/board")
+public class BoardApiController {
+
+    @GetMapping
+    public List<BoardVO> list() {
+        return boardService.getAll();
+        // → [{"seq":1,"title":"..."},{"seq":2,...}]
+    }
+
+    @GetMapping("/{seq}")
+    public ResponseEntity<BoardVO> detail(@PathVariable int seq) {
+        BoardVO vo = boardService.getOne(seq);
+        if (vo == null) return ResponseEntity.notFound().build();
+        return ResponseEntity.ok(vo);
+    }
+}
+```
+
+### ApiResponse 래퍼 — 표준화된 응답 구조
+
+실무에서는 Jackson 직렬화 결과를 공통 래퍼로 감싸 일관된 응답 구조를 만듭니다.
+
+```java
+// 공통 응답 래퍼
+public class ApiResponse<T> {
+    private boolean success;
+    private String message;
+    private T data;
+
+    public static <T> ApiResponse<T> ok(T data) {
+        ApiResponse<T> r = new ApiResponse<>();
+        r.success = true;
+        r.data = data;
+        return r;
+    }
+
+    public static ApiResponse<Void> fail(String msg) {
+        ApiResponse<Void> r = new ApiResponse<>();
+        r.success = false;
+        r.message = msg;
+        return r;
+    }
+}
+
+// 컨트롤러 적용
+@GetMapping("/user/{id}")
+public ApiResponse<UserVO> getUser(@PathVariable String id) {
+    UserVO user = userService.findById(id);
+    return user != null
+        ? ApiResponse.ok(user)
+        : ApiResponse.fail("사용자를 찾을 수 없습니다.");
+}
+// → {"success":true,"message":null,"data":{"id":"user01",...}}
+// → {"success":false,"message":"사용자를 찾을 수 없습니다.","data":null}
+```
+
+```javascript
+// 클라이언트 — 공통 래퍼 처리
+fetch("/user/user01")
+  .then(res => res.json())
+  .then(({ success, message, data }) => {
+    if (!success) { alert(message); return; }
+    renderUser(data);  // data: UserVO 객체
+  });
+```
+
+---
+
+## 데이터 전송 방식 완전 비교 — FormData · URLSearchParams · JSON Body
+
+HTTP 요청 바디에 데이터를 담는 방법은 세 가지입니다. Content-Type 헤더가 서버의 파싱 방식을 결정합니다.
+
+<DataTransmitCompare />
+
+### FormData 핵심 주의점
+
+```javascript
+// ⚠️ FormData 사용 시 Content-Type 헤더를 직접 지정하면 안 됩니다
+fetch("/upload", {
+  method: "POST",
+  // ❌ 잘못된 방식 — boundary가 없어 서버 파싱 실패
+  headers: { "Content-Type": "multipart/form-data" },
+  body: fd
+});
+
+// ✅ 올바른 방식 — headers 생략, 브라우저가 자동 설정
+fetch("/upload", {
+  method: "POST",
+  body: fd  // Content-Type: multipart/form-data; boundary=----WebKitFormBoundary...
+});
+```
+
+> multipart/form-data는 데이터 경계를 나타내는 `boundary` 값이 Content-Type 헤더에 포함되어야 합니다. 브라우저가 FormData를 감지하면 boundary를 자동 생성해 헤더에 추가하므로, 헤더를 직접 지정하면 boundary가 빠져 서버에서 파싱에 실패합니다.
+
+### 한 요청에 파일 + JSON 함께 보내기
+
+```javascript
+// FormData + JSON 혼합 전송
+const fd = new FormData();
+fd.append("file", fileInput.files[0]);
+// JSON을 문자열로 변환 후 Blob으로 추가
+fd.append("meta", new Blob(
+  [JSON.stringify({ title: "제목", tags: ["java"] })],
+  { type: "application/json" }
+));
+
+fetch("/board/upload", { method: "POST", body: fd });
+```
+
+```java
+// 서버: @RequestPart로 혼합 수신
+@PostMapping("/board/upload")
+public ResponseEntity<BoardVO> upload(
+        @RequestParam MultipartFile file,
+        @RequestPart("meta") BoardMetaDTO meta) {
+    // meta: JSON이 DTO로 자동 변환
+    return ResponseEntity.ok(boardService.save(file, meta));
+}
+```
+
+---
+
+## 한눈에 정리
+
+| 항목 | URLSearchParams | FormData | JSON Body |
+|---|---|---|---|
+| **Content-Type** | application/x-www-form-urlencoded | multipart/form-data (자동) | application/json |
+| **파일 전송** | 불가 | 가능 | 불가 |
+| **중첩 구조** | 불가 | 불가 | 가능 |
+| **서버 어노테이션** | @RequestParam, @ModelAttribute | @RequestParam MultipartFile | @RequestBody |
+| **클라이언트** | `new URLSearchParams()` | `new FormData()` | `JSON.stringify()` |
+| **주의사항** | Content-Type 헤더 직접 지정 | 헤더 지정 금지! | Content-Type: application/json 필수 |
+
+| DOM 탐색 | 용도 | 반환 |
+|---|---|---|
+| `querySelector` | CSS 선택자, 첫 번째 요소 | Element or null |
+| `querySelectorAll` | CSS 선택자, 전체 | NodeList |
+| `closest("tr")` | 조상 탐색 (SPA 패턴 핵심) | Element or null |
+| `children[0]` | 자식 Element (인덱스) | Element |
+| `.textContent` | 순수 텍스트 추출 | String |
+| `tr.remove()` | DOM 노드 삭제 (리프레시 없음) | void |
+
+| Jackson | 설명 |
+|---|---|
+| `@RestController` | @Controller + @ResponseBody, 전체 메서드가 JSON 반환 |
+| `@ResponseBody` | 개별 메서드의 반환값을 HTTP 바디로 직렬화 |
+| `@JsonIgnore` | 해당 필드를 직렬화/역직렬화에서 제외 |
+| `@JsonProperty` | JSON 키 이름 재정의 (camelCase ↔ snake_case) |
+| `ObjectMapper` | Jackson의 핵심 클래스, Java ↔ JSON 변환 담당 |
