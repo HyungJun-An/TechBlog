@@ -1,0 +1,1079 @@
+---
+title: "파일 업로드·다운로드 · Ajax 미리보기 · WebSocket 1:N 채팅 완전 정리"
+date: 2026-04-30
+authors: HyungJun
+tags: [Spring, Web, 기본기, 비동기]
+---
+
+import { useState, useEffect, useRef } from 'react';
+
+export function UploadFlowViz() {
+  const [step, setStep] = useState(-1);
+  const [running, setRunning] = useState(false);
+  const [activeTab, setActiveTab] = useState('controller');
+  const timerRef = useRef(null);
+
+  const steps = [
+    { label: '① multipart/form-data 요청 수신', color: '#3b82f6', note: 'enctype="multipart/form-data"로 보낸 요청. Content-Type에 boundary가 포함되어 각 파트를 구분합니다.' },
+    { label: '② MultipartFile 바인딩', color: '#8b5cf6', note: '@RequestParam("file") List<MultipartFile>로 자동 수집. 파일이 없으면 isEmpty()가 true — continue로 건너뜁니다.' },
+    { label: '③ 저장 경로·폴더 준비', color: '#10b981', note: '폴더가 없으면 mkdirs()로 상위 폴더까지 생성. mkdir()는 단일 폴더만 만들어 경로가 없으면 실패합니다.' },
+    { label: '④ UUID 파일명 생성', color: '#f59e0b', note: '원본명은 사용자 표시용, UUID+확장자는 서버 저장용으로 분리. lastIndexOf(".") 기반 substring으로 확장자를 추출합니다.' },
+    { label: '⑤ transferTo() 저장', color: '#06b6d4', note: 'MultipartFile#transferTo(File)가 임시 파일을 지정 경로로 이동/복사. 스트림 루프 없이 한 줄로 처리됩니다.' },
+    { label: '⑥ 모델 전달 & 결과 반환', color: '#ef4444', note: '원본명 리스트와 저장명 리스트를 분리해 모델에 담아 뷰로 전달. 다운로드 링크 구성에 저장명이 필요합니다.' },
+  ];
+
+  const tabs = [
+    {
+      id: 'properties',
+      label: 'application.properties',
+      color: '#3b82f6',
+      code: `# 멀티파트 업로드 설정
+spring.servlet.multipart.enabled=true
+spring.servlet.multipart.max-file-size=10MB
+spring.servlet.multipart.max-request-size=10MB
+
+# 업로드 경로 외부화 (운영 환경에서는 절대 경로 권장)
+upload.location=/data/uploads
+# @Value("\${upload.location}") 로 주입해서 사용`,
+      note: '디폴트로도 동작하지만, 서비스 리소스 관점에서 크기 제한을 명시하는 구성이 일반적입니다. 운영에서는 경로를 properties로 외부화해야 재배포 시 파일이 유지됩니다.',
+    },
+    {
+      id: 'controller',
+      label: '업로드 컨트롤러',
+      color: '#10b981',
+      code: `@Controller
+public class UploadController {
+
+    @GetMapping("/uploadForm.2")
+    public String uploadForm() {
+        return "upload/form";
+    }
+
+    @PostMapping("/upload.2")
+    public String upload(
+            @RequestParam("file") List<MultipartFile> files,
+            @RequestParam("desc") String desc,
+            HttpServletRequest req,
+            Model model) throws Exception {
+
+        // 저장 경로 — 운영에서는 절대 경로/외부 저장소 사용
+        String savePath = req.getServletContext()
+                            .getRealPath("/upload/");
+        File dir = new File(savePath);
+        if (!dir.exists()) dir.mkdirs();  // 상위 폴더까지 생성
+
+        List<String> originNames = new ArrayList<>();
+        List<String> savedNames  = new ArrayList<>();
+
+        for (MultipartFile file : files) {
+            if (file.isEmpty()) continue;  // 빈 파일 건너뜀
+
+            String origin = file.getOriginalFilename();
+            // 확장자 추출: 원본명의 마지막 점 이후
+            String ext = origin.substring(
+                             origin.lastIndexOf('.'));
+            String saved = UUID.randomUUID() + ext;
+
+            try {
+                file.transferTo(new File(savePath + saved));
+                originNames.add(origin);
+                savedNames.add(saved);
+            } catch (IOException e) {
+                // 실패 시 원본명 로그로 디버깅 가능성 확보
+                log.error("업로드 실패: {}", origin, e);
+            }
+        }
+
+        model.addAttribute("originNames", originNames);
+        model.addAttribute("savedNames",  savedNames);
+        model.addAttribute("savePath",    savePath);
+        return "upload/result";
+    }
+}`,
+      note: 'transferTo()가 임시 멀티파트 파일을 지정 경로로 복사합니다. 과거 InputStream → OutputStream 루프를 대체하는 대표 API입니다.',
+    },
+    {
+      id: 'html',
+      label: '업로드 폼 (Thymeleaf)',
+      color: '#f59e0b',
+      code: `<!-- enctype 누락 시 서버에서 파일 바인딩 실패 -->
+<form method="post"
+      action="/upload.2"
+      enctype="multipart/form-data">
+
+  <!-- multiple 속성으로 다중 선택 가능 -->
+  <!-- name="file" ↔ @RequestParam("file") 일치 필수 -->
+  <input type="file" name="file" multiple />
+  <input type="text" name="desc" placeholder="설명" />
+  <button type="submit">업로드</button>
+</form>
+
+<!-- 결과 페이지 -->
+<ul th:each="i : \${#numbers.sequence(0, originNames.size()-1)}">
+  <li>
+    <!-- 원본명 표시, 다운로드는 저장명으로 요청 -->
+    <span th:text="\${originNames[i]}"></span>
+    <a th:href="@{/download.2(saved=\${savedNames[i]},
+                              origin=\${originNames[i]})}">
+      다운로드
+    </a>
+  </li>
+</ul>`,
+      note: '원본명은 사용자에게 보여주는 용도, 저장명은 서버에서 실제 파일을 찾는 용도로 분리합니다. 쿼리스트링에 경로를 그대로 노출하면 변조 위험이 있습니다.',
+    },
+  ];
+
+  const run = () => {
+    if (running) return;
+    setStep(-1);
+    setRunning(true);
+    let i = 0;
+    const tick = () => {
+      setStep(i++);
+      if (i < steps.length) timerRef.current = setTimeout(tick, 650);
+      else setRunning(false);
+    };
+    timerRef.current = setTimeout(tick, 300);
+  };
+
+  useEffect(() => () => clearTimeout(timerRef.current), []);
+
+  const tab = tabs.find(t => t.id === activeTab);
+
+  return (
+    <div style={{ border: '1px solid var(--ifm-color-emphasis-300)', borderRadius: 10, overflow: 'hidden', marginBottom: 24 }}>
+      <div style={{ padding: '10px 14px', background: 'var(--ifm-color-emphasis-100)', borderBottom: '1px solid var(--ifm-color-emphasis-200)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span style={{ fontSize: 11, fontWeight: 700, color: '#6b7280' }}>Spring Boot 파일 업로드 처리 흐름</span>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button onClick={() => { clearTimeout(timerRef.current); setStep(-1); setRunning(false); }}
+            style={{ padding: '3px 10px', borderRadius: 5, background: 'transparent', border: '1px solid var(--ifm-color-emphasis-400)', color: 'var(--ifm-font-color-base)', cursor: 'pointer', fontSize: 11 }}>
+            초기화
+          </button>
+          <button onClick={run} disabled={running}
+            style={{ padding: '4px 12px', borderRadius: 5, background: running ? '#6b7280' : '#3b82f6', color: '#fff', border: 'none', cursor: running ? 'default' : 'pointer', fontWeight: 700, fontSize: 11 }}>
+            {running ? '처리 중...' : '▶ 업로드 흐름 실행'}
+          </button>
+        </div>
+      </div>
+
+      <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 4, borderBottom: '1px solid var(--ifm-color-emphasis-200)' }}>
+        {steps.map((s, i) => {
+          const active = step === i;
+          const done = step > i;
+          return (
+            <div key={i}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderRadius: 7,
+                border: `2px solid ${active || done ? s.color : 'var(--ifm-color-emphasis-200)'}`,
+                background: active ? s.color + '12' : 'transparent', transition: 'all 0.3s' }}>
+                <div style={{ width: 22, height: 22, borderRadius: '50%', flexShrink: 0,
+                  background: done || active ? s.color : 'var(--ifm-color-emphasis-200)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, fontSize: 10 }}>
+                  {done ? '✓' : i + 1}
+                </div>
+                <span style={{ fontSize: 12, fontWeight: active || done ? 700 : 400, color: active ? s.color : 'var(--ifm-font-color-base)' }}>{s.label}</span>
+              </div>
+              {active && (
+                <div style={{ margin: '4px 0 4px 32px', padding: '6px 10px', borderRadius: 6,
+                  background: s.color + '10', borderLeft: `3px solid ${s.color}`, fontSize: 11, color: 'var(--ifm-color-secondary-darkest)', lineHeight: 1.6 }}>
+                  {s.note}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{ background: 'var(--ifm-color-emphasis-100)', borderBottom: '1px solid var(--ifm-color-emphasis-200)' }}>
+        <div style={{ display: 'flex' }}>
+          {tabs.map(t => (
+            <button key={t.id} onClick={() => setActiveTab(t.id)}
+              style={{ padding: '8px 14px', border: 'none', borderBottom: activeTab === t.id ? `3px solid ${t.color}` : '3px solid transparent',
+                background: 'none', color: activeTab === t.id ? t.color : 'var(--ifm-color-secondary-darkest)',
+                fontWeight: activeTab === t.id ? 700 : 400, cursor: 'pointer', fontSize: 12, whiteSpace: 'nowrap' }}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div style={{ padding: 14 }}>
+        <pre style={{ background: '#1e1e2e', color: '#cdd6f4', padding: 12, borderRadius: 8, fontSize: 11, margin: '0 0 8px', overflowX: 'auto' }}>
+          <code>{tab.code}</code>
+        </pre>
+        <div style={{ fontSize: 12, color: 'var(--ifm-color-secondary-darkest)', borderLeft: `3px solid ${tab.color}`, paddingLeft: 10, lineHeight: 1.6 }}>
+          {tab.note}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function AjaxUploadDemo() {
+  const [files, setFiles] = useState([]);
+  const [errors, setErrors] = useState([]);
+  const [activeTab, setActiveTab] = useState('validate');
+  const MAX_SIZE = 5 * 1024 * 1024;
+  const ALLOWED = /\.(jpg|jpeg|png|bmp|gif)$/i;
+
+  const handleFileChange = (e) => {
+    const selected = Array.from(e.target.files);
+    const newFiles = [];
+    const newErrors = [];
+    selected.forEach(f => {
+      if (!ALLOWED.test(f.name)) {
+        newErrors.push(`${f.name} — 허용되지 않는 확장자`);
+      } else if (f.size > MAX_SIZE) {
+        newErrors.push(`${f.name} — 5MB 초과 (${(f.size/1024/1024).toFixed(1)}MB)`);
+      } else {
+        newFiles.push({ name: f.name, size: f.size, url: URL.createObjectURL(f) });
+      }
+    });
+    setFiles(prev => [...prev, ...newFiles]);
+    setErrors(newErrors);
+    e.target.value = '';
+  };
+
+  const remove = (idx) => setFiles(prev => prev.filter((_, i) => i !== idx));
+
+  const tabs = [
+    {
+      id: 'validate',
+      label: '유효성 검사',
+      color: '#ef4444',
+      code: `// 확장자 + 크기 사전 검증
+const ALLOWED = /\\.(jpg|jpeg|png|bmp|gif)$/i;
+const MAX_SIZE = 5 * 1024 * 1024; // 5MB
+
+function validateAndPreview(files) {
+  for (const file of files) {
+    // 소문자 통일 후 확장자 확인
+    if (!ALLOWED.test(file.name.toLowerCase())) {
+      alert(\`\${file.name}: 허용되지 않는 확장자\`);
+      continue;
+    }
+    if (file.size > MAX_SIZE) {
+      alert(\`\${file.name}: 파일 크기 초과\`);
+      continue;
+    }
+    addPreview(file);
+  }
+}`,
+      note: '서버 검증과 별개로 프론트 사전 검증이 필요합니다. SPA에서는 서버 오류를 UI로 되돌리기 어려우므로 확장자/크기를 미리 차단합니다.',
+    },
+    {
+      id: 'preview',
+      label: '미리보기 (Object URL)',
+      color: '#10b981',
+      code: `// URL.createObjectURL: 파일을 임시 URL로 변환
+function addPreview(file) {
+  const url = URL.createObjectURL(file);
+  // → "blob:http://localhost:3000/a1b2c3..."
+
+  const li = document.createElement('li');
+  li.dataset.name = file.name;    // 삭제 이벤트에서 식별용
+  li.innerHTML = \`
+    <img src="\${url}" style="width:80px;height:80px;
+         object-fit:cover" />
+    <span>\${file.name}</span>
+    <button class="removeBtn" data-idx="\${file.name}">
+      삭제
+    </button>
+  \`;
+  previewList.appendChild(li);
+  // URL.revokeObjectURL(url) — 제거 시 메모리 해제 권장
+}`,
+      note: 'URL.createObjectURL()은 파일을 메모리에 임시 URL로 만듭니다. FileReader보다 빠르고 메모리 효율적입니다. 사용 후 revokeObjectURL()로 해제하세요.',
+    },
+    {
+      id: 'delegate',
+      label: '이벤트 위임 (삭제)',
+      color: '#8b5cf6',
+      code: `// 이벤트 위임: 동적으로 생성된 삭제 버튼을 처리
+// 생성 시점에 버튼마다 이벤트를 달면 매번 재등록 필요
+// → 상위 UL에 한 번만 등록하고 target을 판별
+
+previewList.addEventListener('click', function(e) {
+  // 클릭된 요소가 삭제 버튼인지 확인
+  if (!e.target.classList.contains('removeBtn')) return;
+
+  const li = e.target.closest('li');
+  const removedName = li.dataset.name;
+
+  // 화면에서 제거
+  li.remove();
+
+  // 실제 전송 대상: 남은 파일명으로 FormData 재구성
+  // input.files는 줄어들지 않으므로 직접 필터링
+  const remaining = [...previewList.querySelectorAll('li')]
+                      .map(el => el.dataset.name);
+  // → fetch 시 remaining 기반으로 FormData 구성
+});`,
+      note: '동적으로 생성된 요소에 이벤트를 직접 달면 새 요소가 추가될 때마다 재등록이 필요합니다. 상위 요소에 한 번만 등록하는 이벤트 위임이 더 효율적입니다.',
+    },
+    {
+      id: 'fetch',
+      label: 'Fetch 전송',
+      color: '#f59e0b',
+      code: `// FormData + Fetch: Content-Type 지정 금지!
+document.querySelector('#uploadBtn')
+  .addEventListener('click', async () => {
+
+    const fd = new FormData();
+
+    // 화면에 남은 파일명만 전송 (삭제된 파일 제외)
+    const remaining = [...previewList.querySelectorAll('li')]
+                        .map(el => el.dataset.name);
+
+    [...fileInput.files]
+      .filter(f => remaining.includes(f.name))
+      .forEach(f => fd.append('file', f));
+
+    fd.append('desc', descInput.value);
+
+    // ⚠️ Content-Type 헤더를 지정하지 않음
+    // 브라우저가 multipart/form-data; boundary=... 자동 설정
+    const res = await fetch('/ajaxUpload.2', {
+      method: 'POST',
+      body: fd
+    });
+    const result = await res.json();
+    if (result.success) location.reload();
+  });`,
+      note: 'FormData를 body로 보낼 때 Content-Type을 직접 지정하면 boundary가 빠져 서버가 멀티파트로 해석하지 못합니다. 반드시 생략해야 합니다.',
+    },
+  ];
+
+  const tab = tabs.find(t => t.id === activeTab);
+
+  return (
+    <div style={{ border: '1px solid var(--ifm-color-emphasis-300)', borderRadius: 10, overflow: 'hidden', marginBottom: 24 }}>
+      <div style={{ padding: '10px 14px', background: 'var(--ifm-color-emphasis-100)', borderBottom: '1px solid var(--ifm-color-emphasis-200)', fontSize: 11, fontWeight: 700, color: '#6b7280' }}>
+        Ajax 파일 업로드 미리보기 시뮬레이션
+      </div>
+
+      {/* 파일 선택 + 미리보기 */}
+      <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--ifm-color-emphasis-200)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+          <label style={{ padding: '5px 12px', borderRadius: 6, background: '#3b82f6', color: '#fff', cursor: 'pointer', fontSize: 11, fontWeight: 700 }}>
+            파일 선택 (이미지, 최대 5MB)
+            <input type="file" multiple accept=".jpg,.jpeg,.png,.bmp,.gif" style={{ display: 'none' }} onChange={handleFileChange} />
+          </label>
+          {files.length > 0 && (
+            <span style={{ fontSize: 11, color: '#10b981', fontWeight: 600 }}>{files.length}개 선택됨</span>
+          )}
+        </div>
+
+        {errors.length > 0 && (
+          <div style={{ marginBottom: 8 }}>
+            {errors.map((e, i) => (
+              <div key={i} style={{ fontSize: 11, color: '#ef4444', padding: '3px 8px', background: '#fee2e2', borderRadius: 4, marginBottom: 3 }}>
+                ✕ {e}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {files.length > 0 ? (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            {files.map((f, i) => (
+              <div key={i} style={{ position: 'relative', border: '1px solid var(--ifm-color-emphasis-300)', borderRadius: 8, overflow: 'hidden', width: 90 }}>
+                <img src={f.url} alt={f.name} style={{ width: '100%', height: 72, objectFit: 'cover', display: 'block' }} />
+                <div style={{ padding: '3px 5px', fontSize: 9, color: 'var(--ifm-color-secondary-darkest)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {f.name}
+                </div>
+                <button onClick={() => remove(i)}
+                  style={{ position: 'absolute', top: 3, right: 3, width: 18, height: 18, borderRadius: '50%', background: '#ef4444', color: '#fff', border: 'none', cursor: 'pointer', fontSize: 10, fontWeight: 700, lineHeight: 1, padding: 0 }}>
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div style={{ padding: 16, textAlign: 'center', color: 'var(--ifm-color-secondary-darkest)', fontSize: 12, fontStyle: 'italic', border: '2px dashed var(--ifm-color-emphasis-300)', borderRadius: 8 }}>
+            이미지 파일을 선택하면 미리보기가 표시됩니다
+          </div>
+        )}
+      </div>
+
+      {/* 코드 탭 */}
+      <div style={{ background: 'var(--ifm-color-emphasis-100)', borderBottom: '1px solid var(--ifm-color-emphasis-200)' }}>
+        <div style={{ display: 'flex', overflowX: 'auto' }}>
+          {tabs.map(t => (
+            <button key={t.id} onClick={() => setActiveTab(t.id)}
+              style={{ padding: '8px 14px', border: 'none', borderBottom: activeTab === t.id ? `3px solid ${t.color}` : '3px solid transparent',
+                background: 'none', color: activeTab === t.id ? t.color : 'var(--ifm-color-secondary-darkest)',
+                fontWeight: activeTab === t.id ? 700 : 400, cursor: 'pointer', fontSize: 12, whiteSpace: 'nowrap' }}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div style={{ padding: 14 }}>
+        <pre style={{ background: '#1e1e2e', color: '#cdd6f4', padding: 12, borderRadius: 8, fontSize: 11, margin: '0 0 8px', overflowX: 'auto' }}>
+          <code>{tab.code}</code>
+        </pre>
+        <div style={{ fontSize: 12, color: 'var(--ifm-color-secondary-darkest)', borderLeft: `3px solid ${tab.color}`, paddingLeft: 10, lineHeight: 1.6 }}>
+          {tab.note}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function WebSocketTypeMap() {
+  const [selected, setSelected] = useState(null);
+
+  const types = [
+    {
+      id: 'raw',
+      label: 'Raw WebSocket',
+      subtitle: '순수 WebSocket API',
+      color: '#3b82f6',
+      layer: 'WebSocket Protocol (RFC 6455)',
+      spring: 'TextWebSocketHandler / AbstractWebSocketHandler',
+      pros: ['설정 최소화', '가볍고 빠름', '프로토콜 제약 없음'],
+      cons: ['메시지 형식 직접 설계 필요', '브로드캐스트 로직 직접 구현', '확장(구독 등) 어려움'],
+      usecase: '소규모 1:N 채팅, 실시간 알림, 간단한 실시간 피드',
+      code: `// 핸들러 등록
+@Configuration
+@EnableWebSocket
+public class WsConfig implements WebSocketConfigurer {
+    @Override
+    public void registerWebSocketHandlers(
+            WebSocketHandlerRegistry registry) {
+        registry.addHandler(chatHandler(), "/ws/chat")
+                .setAllowedOrigins("*");
+    }
+}
+
+// 핸들러 구현
+@Component
+public class ChatHandler extends TextWebSocketHandler {
+    // 세션 목록 + 닉네임 맵 직접 관리
+}`,
+      note: '오늘 강의에서 실습한 방식. 프로토콜을 직접 설계하므로 자유롭지만 관리 비용이 높습니다.',
+    },
+    {
+      id: 'stomp',
+      label: 'STOMP over WebSocket',
+      subtitle: 'Spring WebSocket + STOMP',
+      color: '#10b981',
+      layer: 'STOMP (Simple Text Oriented Messaging Protocol)',
+      spring: '@EnableWebSocketMessageBroker / @MessageMapping',
+      pros: ['발행-구독 패턴 기본 제공', '@MessageMapping으로 라우팅 자동화', 'SockJS fallback 지원', 'Spring Security 연동 용이'],
+      cons: ['설정 복잡도 증가', 'STOMP 프레임 오버헤드', '클라이언트도 STOMP 라이브러리 필요'],
+      usecase: '대규모 채팅, 알림 센터, 협업 문서, 주식 시세처럼 채널(토픽) 기반 구독이 필요한 경우',
+      code: `// STOMP 설정
+@Configuration
+@EnableWebSocketMessageBroker
+public class StompConfig implements
+        WebSocketMessageBrokerConfigurer {
+
+    @Override
+    public void configureMessageBroker(
+            MessageBrokerRegistry registry) {
+        registry.enableSimpleBroker("/topic");
+        registry.setApplicationDestinationPrefixes("/app");
+    }
+
+    @Override
+    public void registerStompEndpoints(
+            StompEndpointRegistry registry) {
+        registry.addEndpoint("/ws-stomp")
+                .withSockJS();  // WebSocket 미지원 시 폴백
+    }
+}
+
+// 컨트롤러
+@MessageMapping("/chat.send")
+@SendTo("/topic/chat")
+public ChatMessage handleMessage(ChatMessage msg) {
+    return msg;  // 구독 중인 모든 클라이언트에 전파
+}`,
+      note: '실무에서 가장 많이 쓰이는 방식. 메시지 라우팅·브로드캐스팅을 프레임워크가 담당해 비즈니스 로직에만 집중할 수 있습니다.',
+    },
+    {
+      id: 'sockjs',
+      label: 'SockJS',
+      subtitle: 'WebSocket Fallback 레이어',
+      color: '#f59e0b',
+      layer: 'SockJS 에뮬레이션 레이어 (HTTP Long-Polling 등)',
+      spring: '.withSockJS() 체이닝',
+      pros: ['WebSocket 미지원 환경(구형 브라우저·프록시)에서도 동작', 'WebSocket과 동일한 API로 사용', 'STOMP와 조합해서 자주 사용'],
+      cons: ['Long-Polling 폴백은 WebSocket보다 느림', '추가 라이브러리 (sockjs-client) 필요'],
+      usecase: '기업 내부망(프록시가 WebSocket을 차단)이나 IE 지원이 필요한 환경',
+      code: `// 서버: .withSockJS() 추가만으로 폴백 활성화
+registry.addEndpoint("/ws-stomp").withSockJS();
+
+// 클라이언트: WebSocket 대신 SockJS 사용
+// <script src="/webjars/sockjs-client/sockjs.min.js">
+const socket = new SockJS('/ws-stomp');
+const stompClient = Stomp.over(socket);
+stompClient.connect({}, () => {
+    stompClient.subscribe('/topic/chat', msg => {
+        const body = JSON.parse(msg.body);
+        appendMessage(body);
+    });
+});`,
+      note: 'WebSocket 연결 실패 시 자동으로 HTTP Long-Polling 등으로 폴백합니다. STOMP와 함께 쓰면 광범위한 환경을 커버할 수 있습니다.',
+    },
+    {
+      id: 'rsocket',
+      label: 'RSocket',
+      subtitle: '반응형 스트리밍 프로토콜',
+      color: '#8b5cf6',
+      layer: 'RSocket Protocol (Reactive Streams 기반)',
+      spring: 'Spring RSocket (spring-boot-starter-rsocket)',
+      pros: ['요청-응답 / 스트리밍 / Fire-and-Forget 모두 지원', 'Backpressure 기본 제공', 'MSA 서비스 간 통신에 적합'],
+      cons: ['학습 곡선 높음', '브라우저 지원 제한적', '실무 도입 사례 아직 적음'],
+      usecase: '마이크로서비스 간 스트리밍 통신, 반응형 데이터 파이프라인 (일반 채팅에는 과도함)',
+      code: `// RSocket 서버 (간단 예시)
+@Controller
+public class RSocketController {
+
+    // 요청-응답 패턴
+    @MessageMapping("user.find")
+    public Mono<UserVO> findUser(String id) {
+        return userService.findById(id);
+    }
+
+    // 서버 → 클라이언트 스트리밍
+    @MessageMapping("stock.price")
+    public Flux<StockPrice> streamPrice(String symbol) {
+        return priceService.stream(symbol)
+            .delayElements(Duration.ofSeconds(1));
+    }
+}`,
+      note: '일반적인 채팅보다는 MSA 내부 통신이나 반응형 스트리밍에 적합합니다. 웹 채팅에는 STOMP over WebSocket이 충분합니다.',
+    },
+  ];
+
+  const sel = types.find(t => t.id === selected);
+
+  return (
+    <div style={{ border: '1px solid var(--ifm-color-emphasis-300)', borderRadius: 10, overflow: 'hidden', marginBottom: 24 }}>
+      <div style={{ padding: '10px 14px', background: 'var(--ifm-color-emphasis-100)', borderBottom: '1px solid var(--ifm-color-emphasis-200)', fontSize: 11, fontWeight: 700, color: '#6b7280' }}>
+        Spring WebSocket 기술 스택 비교 — 클릭해서 상세 확인
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0 }}>
+        {types.map((t, i) => (
+          <div key={t.id} onClick={() => setSelected(selected === t.id ? null : t.id)}
+            style={{ padding: '14px 16px', cursor: 'pointer', transition: 'background 0.2s',
+              background: selected === t.id ? t.color + '12' : 'transparent',
+              borderRight: i % 2 === 0 ? '1px solid var(--ifm-color-emphasis-200)' : 'none',
+              borderBottom: i < 2 ? '1px solid var(--ifm-color-emphasis-200)' : 'none',
+              borderLeft: selected === t.id ? `4px solid ${t.color}` : '4px solid transparent' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+              <span style={{ padding: '2px 8px', borderRadius: 10, background: t.color + '20', color: t.color, fontSize: 10, fontWeight: 700 }}>
+                {t.id === 'raw' ? '오늘 실습' : t.id === 'stomp' ? '실무 주류' : t.id === 'sockjs' ? '폴백 레이어' : '반응형'}
+              </span>
+            </div>
+            <div style={{ fontWeight: 700, fontSize: 13, color: selected === t.id ? t.color : 'var(--ifm-font-color-base)', marginBottom: 2 }}>{t.label}</div>
+            <div style={{ fontSize: 11, color: 'var(--ifm-color-secondary-darkest)' }}>{t.subtitle}</div>
+          </div>
+        ))}
+      </div>
+
+      {sel && (
+        <div style={{ borderTop: '1px solid var(--ifm-color-emphasis-200)', padding: '14px 16px' }}>
+          <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+            <span style={{ fontWeight: 700, fontSize: 13, color: sel.color }}>{sel.label}</span>
+            <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10, background: 'var(--ifm-color-emphasis-200)', color: 'var(--ifm-color-secondary-darkest)', fontFamily: 'monospace' }}>
+              {sel.layer}
+            </span>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 12 }}>
+            <div style={{ padding: '10px 12px', borderRadius: 8, background: '#05200f', border: '1px solid #166534' }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: '#4ade80', marginBottom: 6 }}>장점</div>
+              {sel.pros.map((p, i) => <div key={i} style={{ fontSize: 11, color: '#86efac', marginBottom: 3 }}>✓ {p}</div>)}
+            </div>
+            <div style={{ padding: '10px 12px', borderRadius: 8, background: '#1c0505', border: '1px solid #991b1b' }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: '#f87171', marginBottom: 6 }}>단점·주의</div>
+              {sel.cons.map((c, i) => <div key={i} style={{ fontSize: 11, color: '#fca5a5', marginBottom: 3 }}>△ {c}</div>)}
+            </div>
+          </div>
+
+          <div style={{ marginBottom: 10, padding: '7px 10px', borderRadius: 6, background: sel.color + '12', border: `1px solid ${sel.color}40`, fontSize: 12 }}>
+            <span style={{ fontWeight: 700, color: sel.color, fontSize: 11 }}>적합한 사용 사례: </span>
+            <span style={{ color: 'var(--ifm-font-color-base)' }}>{sel.usecase}</span>
+          </div>
+
+          <pre style={{ background: '#1e1e2e', color: '#cdd6f4', padding: 12, borderRadius: 8, fontSize: 10.5, margin: '0 0 8px', overflowX: 'auto' }}>
+            <code>{sel.code}</code>
+          </pre>
+          <div style={{ fontSize: 12, color: 'var(--ifm-color-secondary-darkest)', borderLeft: `3px solid ${sel.color}`, paddingLeft: 10, lineHeight: 1.6 }}>
+            {sel.note}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function ChatDemo() {
+  const [messages, setMessages] = useState([
+    { type: 'system', text: '채팅방에 입장했습니다.' },
+    { type: 'other', nick: 'user02', text: '안녕하세요!' },
+    { type: 'mine', nick: 'user01', text: '반갑습니다 :)' },
+  ]);
+  const [nick, setNick] = useState('');
+  const [joined, setJoined] = useState(false);
+  const [input, setInput] = useState('');
+  const [connected, setConnected] = useState(false);
+  const [activeTab, setActiveTab] = useState('handler');
+  const bottomRef = useRef(null);
+
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+
+  const connect = () => {
+    if (!nick.trim()) return;
+    setConnected(true);
+    setJoined(true);
+    setMessages(prev => [...prev,
+      { type: 'system', text: `${nick}님이 입장했습니다.` }
+    ]);
+  };
+
+  const send = () => {
+    if (!input.trim() || !connected) return;
+    setMessages(prev => [...prev, { type: 'mine', nick, text: input }]);
+    setInput('');
+    setTimeout(() => {
+      setMessages(prev => [...prev, { type: 'other', nick: 'user02', text: `"${input}" — 받았습니다!` }]);
+    }, 600);
+  };
+
+  const disconnect = () => {
+    setConnected(false);
+    setMessages(prev => [...prev, { type: 'system', text: `${nick}님이 퇴장했습니다.` }]);
+  };
+
+  const tabs = [
+    {
+      id: 'handler',
+      label: 'TextWebSocketHandler',
+      color: '#3b82f6',
+      code: `@Component
+public class ChatHandler extends TextWebSocketHandler {
+
+    // 접속 중인 세션 + 닉네임 맵
+    private final List<WebSocketSession> sessions
+        = new CopyOnWriteArrayList<>();
+    private final Map<WebSocketSession, String> nickMap
+        = new ConcurrentHashMap<>();
+
+    @Override
+    public void afterConnectionEstablished(
+            WebSocketSession session) {
+        sessions.add(session);
+        System.out.println("연결: " + session.getId());
+    }
+
+    @Override
+    protected void handleTextMessage(
+            WebSocketSession session,
+            TextMessage message) throws Exception {
+
+        // getPayload(): 실제 문자열 추출
+        // (toString()과 달리 TextMessage 래퍼 제거)
+        String payload = message.getPayload();
+
+        if (payload.contains("#$nick")) {
+            // 닉네임 등록 프리픽스 분기
+            String nick = payload.replace("#$nick", "");
+            nickMap.put(session, nick);
+            broadcast(nick + "님이 입장했습니다.", session, true);
+        } else {
+            String nick = nickMap.getOrDefault(session, "익명");
+            broadcast("[" + nick + "] " + payload,
+                      session, false);
+        }
+    }
+
+    @Override
+    public void afterConnectionClosed(
+            WebSocketSession session,
+            CloseStatus status) {
+        String nick = nickMap.remove(session);
+        sessions.remove(session);
+        broadcast(nick + "님이 퇴장했습니다.", null, true);
+    }
+
+    private void broadcast(String text,
+                           WebSocketSession exclude,
+                           boolean includeAll) {
+        TextMessage msg = new TextMessage(text);
+        for (WebSocketSession s : sessions) {
+            if (!includeAll && s.equals(exclude)) continue;
+            try {
+                if (s.isOpen()) s.sendMessage(msg);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+}`,
+      note: 'CopyOnWriteArrayList와 ConcurrentHashMap을 사용해 멀티스레드 환경에서 세션 목록을 안전하게 관리합니다. ArrayList/HashMap은 동시 접근 시 ConcurrentModificationException이 발생할 수 있습니다.',
+    },
+    {
+      id: 'config',
+      label: '설정 & 프론트',
+      color: '#10b981',
+      code: `// === 서버: 설정 클래스 ===
+@Configuration
+@EnableWebSocket
+public class WebSocketConfig
+        implements WebSocketConfigurer {
+
+    @Autowired ChatHandler chatHandler;
+
+    @Override
+    public void registerWebSocketHandlers(
+            WebSocketHandlerRegistry registry) {
+        registry.addHandler(chatHandler, "/ws/chat")
+                .setAllowedOrigins("*");
+        // SPA(외부 도메인)에서 연결 시 CORS 허용 필요
+    }
+}
+
+// === 프론트: WebSocket 연결 ===
+// 프로토콜에 따라 ws/wss 자동 선택
+const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
+const contextPath = /*[[ \${#request.contextPath} ]]*/ '';
+const ws = new WebSocket(
+    \`\${protocol}://\${location.host}\${contextPath}/ws/chat\`
+);
+
+ws.onopen = () => {
+    // 닉네임 등록 — 프리픽스 방식
+    ws.send('#$nick' + nickInput.value);
+};
+
+ws.onmessage = (e) => {
+    const li = document.createElement('li');
+    li.innerHTML = e.data;   // 서버에서 HTML 문자열로 전송
+    msgList.appendChild(li);
+    // 스크롤 자동 이동
+    msgList.scrollTop = msgList.scrollHeight;
+};
+
+ws.onclose = () => { console.log('연결 종료'); };
+ws.onerror = (e) => { console.error('WS 오류', e); };
+
+// 페이지 이탈 시 세션 정리
+window.onbeforeunload = () => {
+    if (ws.readyState === WebSocket.OPEN) ws.close();
+};
+
+// 메시지 전송: OPEN 상태 확인 필수
+function sendMessage() {
+    if (ws.readyState !== WebSocket.OPEN) return;
+    ws.send(msgInput.value);
+    msgInput.value = '';
+}`,
+      note: 'readyState === WebSocket.OPEN 확인 없이 send()를 호출하면 연결 전/종료 후에 오류가 발생합니다. onbeforeunload에서 소켓을 닫아야 서버 세션 누수를 줄일 수 있습니다.',
+    },
+  ];
+
+  const tab = tabs.find(t => t.id === activeTab);
+
+  return (
+    <div style={{ border: '1px solid var(--ifm-color-emphasis-300)', borderRadius: 10, overflow: 'hidden', marginBottom: 24 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '300px 1fr', minHeight: 300 }}>
+        {/* 채팅 UI */}
+        <div style={{ borderRight: '1px solid var(--ifm-color-emphasis-200)', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ padding: '8px 12px', background: 'var(--ifm-color-emphasis-100)', borderBottom: '1px solid var(--ifm-color-emphasis-200)', fontSize: 11, fontWeight: 700, color: '#6b7280', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>채팅 시뮬레이션</span>
+            <span style={{ padding: '1px 7px', borderRadius: 10, background: connected ? '#dcfce7' : '#fee2e2', color: connected ? '#16a34a' : '#dc2626', fontSize: 10, fontWeight: 700 }}>
+              {connected ? 'OPEN' : 'CLOSED'}
+            </span>
+          </div>
+
+          {!joined ? (
+            <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 8, flex: 1, justifyContent: 'center' }}>
+              <input value={nick} onChange={e => setNick(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && connect()}
+                placeholder="닉네임 입력" maxLength={10}
+                style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid var(--ifm-color-emphasis-300)', fontSize: 12, background: 'var(--ifm-background-color)', color: 'var(--ifm-font-color-base)' }} />
+              <button onClick={connect}
+                style={{ padding: '6px 0', borderRadius: 6, background: '#3b82f6', color: '#fff', border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 700 }}>
+                입장 (ws.send("#$nick..."))
+              </button>
+            </div>
+          ) : (
+            <>
+              <div style={{ flex: 1, overflowY: 'auto', padding: '8px 10px', maxHeight: 220, minHeight: 160 }}>
+                {messages.map((m, i) => (
+                  <div key={i} style={{ marginBottom: 6, display: 'flex', flexDirection: 'column',
+                    alignItems: m.type === 'mine' ? 'flex-end' : m.type === 'system' ? 'center' : 'flex-start' }}>
+                    {m.type === 'system' ? (
+                      <span style={{ fontSize: 10, color: '#9ca3af', padding: '2px 8px', background: 'var(--ifm-color-emphasis-100)', borderRadius: 10 }}>{m.text}</span>
+                    ) : (
+                      <>
+                        <span style={{ fontSize: 9, color: '#9ca3af', marginBottom: 2 }}>{m.nick}</span>
+                        <span style={{ padding: '5px 9px', borderRadius: 10, fontSize: 11, maxWidth: 200, wordBreak: 'break-word',
+                          background: m.type === 'mine' ? '#3b82f6' : 'var(--ifm-color-emphasis-200)',
+                          color: m.type === 'mine' ? '#fff' : 'var(--ifm-font-color-base)' }}>
+                          {m.text}
+                        </span>
+                      </>
+                    )}
+                  </div>
+                ))}
+                <div ref={bottomRef} />
+              </div>
+              <div style={{ padding: '8px 10px', borderTop: '1px solid var(--ifm-color-emphasis-200)', display: 'flex', gap: 5 }}>
+                <input value={input} onChange={e => setInput(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && send()}
+                  disabled={!connected} placeholder={connected ? '메시지 입력' : '연결 종료됨'}
+                  style={{ flex: 1, padding: '5px 8px', borderRadius: 5, border: '1px solid var(--ifm-color-emphasis-300)', fontSize: 11, background: 'var(--ifm-background-color)', color: 'var(--ifm-font-color-base)' }} />
+                <button onClick={send} disabled={!connected}
+                  style={{ padding: '5px 10px', borderRadius: 5, background: connected ? '#3b82f6' : '#9ca3af', color: '#fff', border: 'none', cursor: connected ? 'pointer' : 'default', fontSize: 11, fontWeight: 700 }}>
+                  전송
+                </button>
+              </div>
+              <div style={{ padding: '6px 10px', borderTop: '1px solid var(--ifm-color-emphasis-200)' }}>
+                <button onClick={disconnect} disabled={!connected}
+                  style={{ width: '100%', padding: '4px 0', borderRadius: 5, background: 'transparent', border: '1px solid #ef4444', color: '#ef4444', cursor: 'pointer', fontSize: 11 }}>
+                  ws.close() — 퇴장
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* 코드 탭 */}
+        <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+          <div style={{ background: 'var(--ifm-color-emphasis-100)', borderBottom: '1px solid var(--ifm-color-emphasis-200)', display: 'flex' }}>
+            {tabs.map(t => (
+              <button key={t.id} onClick={() => setActiveTab(t.id)}
+                style={{ padding: '8px 14px', border: 'none', borderBottom: activeTab === t.id ? `3px solid ${t.color}` : '3px solid transparent',
+                  background: 'none', color: activeTab === t.id ? t.color : 'var(--ifm-color-secondary-darkest)',
+                  fontWeight: activeTab === t.id ? 700 : 400, cursor: 'pointer', fontSize: 11, whiteSpace: 'nowrap' }}>
+                {t.label}
+              </button>
+            ))}
+          </div>
+          <div style={{ padding: 12, flex: 1, overflow: 'auto' }}>
+            <pre style={{ background: '#1e1e2e', color: '#cdd6f4', padding: 12, borderRadius: 8, fontSize: 10, margin: '0 0 8px', overflowX: 'auto' }}>
+              <code>{tab.code}</code>
+            </pre>
+            <div style={{ fontSize: 11, color: 'var(--ifm-color-secondary-darkest)', borderLeft: `3px solid ${tab.color}`, paddingLeft: 8, lineHeight: 1.6 }}>
+              {tab.note}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+**파일 업로드·다운로드(transferTo·UUID·다운로드 헤더)**, **Ajax FormData 미리보기·이벤트 위임**, **Spring WebSocket 기술 스택 비교**, **순수 TextWebSocketHandler 1:N 채팅 구현** — 실습 중심으로 정리합니다.
+
+<!-- truncate -->
+
+## 파일 업로드 — MultipartFile · UUID · transferTo
+
+<UploadFlowViz />
+
+### 파일 저장 핵심 포인트
+
+```java
+// 확장자 추출: 원본 파일명의 마지막 점 이후
+String ext = original.substring(original.lastIndexOf('.'));
+// "profile.jpg" → ".jpg"
+
+// UUID 저장명: 충돌 불가, 추정 불가
+String saved = UUID.randomUUID() + ext;
+// → "a3f2e1d0-b5c4-4e7f-a8d9-12345678abcd.jpg"
+
+// 폴더 생성: mkdirs()가 mkdir()보다 안전
+new File(savePath).mkdirs();
+
+// transferTo(): 임시 파일 → 지정 경로 이동
+file.transferTo(new File(savePath + saved));
+```
+
+> **getRealPath() 주의**: 개발 환경에서는 편하지만, 외장 서버(jar 배포, 도커 컨테이너) 환경에서는 경로가 달라지거나 재시작 시 파일이 사라질 수 있습니다. 운영에서는 `@Value`로 주입하는 절대 경로 또는 S3/NAS 같은 외부 스토리지를 사용하세요.
+
+---
+
+## 파일 다운로드 — 응답 헤더 설정
+
+```java
+@GetMapping("/download.2")
+@ResponseBody
+public byte[] download(
+        @RequestParam String saved,
+        @RequestParam String origin,
+        HttpServletRequest req,
+        HttpServletResponse res) throws Exception {
+
+    String savePath = req.getServletContext()
+                        .getRealPath("/upload/");
+    File file = new File(savePath + saved);
+
+    // 다운로드 강제: attachment + 파일명 지정
+    // 한글 파일명 깨짐 방지: ISO-8859-1 인코딩
+    String encodedName = new String(
+        origin.getBytes("UTF-8"), "8859_1");
+    res.setHeader("Content-Disposition",
+        "attachment; filename=\"" + encodedName + "\"");
+
+    // 범용 바이너리 — 특정 타입(PDF 등)은 명시 가능
+    res.setContentType("application/octet-stream");
+
+    // 다운로드 진행률 표시를 위해 크기 지정
+    byte[] bytes = FileCopyUtils.copyToByteArray(file);
+    res.setContentLength(bytes.length);
+
+    return bytes;
+}
+```
+
+| 헤더 | 값 | 목적 |
+|---|---|---|
+| `Content-Disposition` | `attachment; filename="..."` | 브라우저에 파일로 저장하도록 지시 |
+| `Content-Type` | `application/octet-stream` | 범용 바이너리 (브라우저가 실행하지 않음) |
+| `Content-Length` | `bytes.length` | 다운로드 진행률 바 표시 가능 |
+
+> `inline`으로 지정하면 브라우저가 PDF·이미지를 다운로드 대신 화면에 표시합니다. 강제 다운로드가 목적이라면 반드시 `attachment`를 사용하세요.
+
+---
+
+## Ajax(FormData) 업로드 + 미리보기
+
+파일 선택 후 서버 왕복 없이 즉시 미리보기를 보여주고, 삭제된 파일은 전송 대상에서 제외하는 흐름입니다.
+
+<AjaxUploadDemo />
+
+### 이벤트 위임이 필요한 이유
+
+```javascript
+// ❌ 생성 시점마다 이벤트 등록 — 동적 추가 요소에 취약
+files.forEach(f => {
+  const btn = createRemoveBtn(f);
+  btn.addEventListener('click', () => remove(f)); // 매번 등록
+  list.appendChild(btn);
+});
+
+// ✅ 상위 요소에 위임 — 언제 추가되든 자동 처리
+list.addEventListener('click', (e) => {
+  if (!e.target.classList.contains('removeBtn')) return;
+  e.target.closest('li').remove();
+  // 이벤트 버블링(propagation)으로 상위까지 전달되는 원리
+});
+```
+
+---
+
+## Spring WebSocket 기술 스택
+
+MIME 타입과 WebSocket의 관계, 그리고 Spring에서 제공하는 방식들을 정리합니다.
+
+### WebSocket 핸드셰이크와 MIME
+
+WebSocket 연결은 HTTP Upgrade 요청으로 시작합니다. 일반 HTTP 요청이 아니므로 HTML/JSON처럼 Content-Type(MIME 타입)이 응답 바디에 없지만, **핸드셰이크 시 `Sec-WebSocket-Protocol` 헤더로 서브 프로토콜을 협상**합니다.
+
+```
+Client → Server (HTTP Upgrade 요청)
+GET /ws/chat HTTP/1.1
+Upgrade: websocket
+Connection: Upgrade
+Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==
+Sec-WebSocket-Version: 13
+Sec-WebSocket-Protocol: stomp, chat  ← 서브 프로토콜 협상
+
+Server → Client (101 Switching Protocols)
+HTTP/1.1 101 Switching Protocols
+Upgrade: websocket
+Connection: Upgrade
+Sec-WebSocket-Accept: ...
+Sec-WebSocket-Protocol: stomp       ← 선택된 프로토콜
+```
+
+핸드셰이크 이후 연결이 전환되면 HTTP가 아닌 **WebSocket 프레임** 단위로 통신합니다. 이때 메시지 내용이 텍스트인지 바이너리인지를 프레임 타입(opcode)으로 구분합니다.
+
+<WebSocketTypeMap />
+
+---
+
+## 순수 TextWebSocketHandler 1:N 채팅 실습
+
+STOMP 없이 순수 WebSocket만으로 채팅을 구성했습니다. 세션 목록 직접 관리, 프리픽스 기반 메시지 분기가 핵심입니다.
+
+<ChatDemo />
+
+### 핸들러 계층 구조
+
+```
+WebSocketHandler  ← 최상위 인터페이스
+  └── AbstractWebSocketHandler  ← 공통 기반 (텍스트+바이너리)
+        ├── TextWebSocketHandler   ← 텍스트 메시지 처리 (오늘 실습)
+        └── BinaryWebSocketHandler ← 바이너리 데이터 처리 (이미지·음성)
+```
+
+| 클래스 | 오버라이드 대상 | 용도 |
+|---|---|---|
+| `TextWebSocketHandler` | `handleTextMessage()` | 문자 기반 채팅, JSON 명령 처리 |
+| `BinaryWebSocketHandler` | `handleBinaryMessage()` | 파일·이미지·음성 스트리밍 |
+| `AbstractWebSocketHandler` | 둘 다 | 텍스트·바이너리 혼용 |
+
+### getPayload() vs toString() 차이
+
+```java
+// TextMessage가 수신됐을 때
+TextMessage message = ...; // "안녕하세요"
+
+message.getPayload()  // → "안녕하세요"  ← 실제 내용만 추출
+message.toString()    // → "TextMessage payload=[안녕하세요], last=true"
+                      //    래퍼 정보가 포함되어 직접 쓰면 의도치 않은 문자 포함
+```
+
+### 프리픽스 기반 메시지 분기
+
+수업에서는 `#$nick`이라는 특수 프리픽스로 닉네임 등록과 일반 채팅을 구분했습니다.
+
+```java
+if (payload.contains("#$nick")) {
+    // 닉네임 등록 처리
+    String nick = payload.replace("#$nick", "");
+    nickMap.put(session, nick);
+    broadcast(nick + "님이 입장했습니다.", session, true);
+} else if (payload.contains("!ALERT")) {
+    // 알림 메시지 분기
+    handleAlert(payload, session);
+} else {
+    // 일반 채팅 메시지
+    String nick = nickMap.getOrDefault(session, "익명");
+    broadcast("<b>" + nick + "</b>: " + payload, null, false);
+}
+```
+
+> 프리픽스 방식은 단순하지만 특수문자 충돌 위험이 있습니다. 확장성이 필요하면 JSON 메시지 모델(`{"type":"CHAT","payload":"..."}`)로 발전시키는 것이 좋습니다. STOMP를 쓰면 이 분기 처리 자체가 `@MessageMapping` 라우팅으로 자동화됩니다.
+
+---
+
+## 한눈에 정리
+
+| MultipartFile | 메서드 | 설명 |
+|---|---|---|
+| `getOriginalFilename()` | 원본 파일명 | 사용자에게 보여줄 때 사용 |
+| `isEmpty()` | 파일 없음 여부 | 빈 파일 건너뛰기 방어 코드 |
+| `transferTo(File)` | 저장 | 임시 파일 → 지정 경로 이동 |
+| `getSize()` | 파일 크기(bytes) | 서버 측 크기 검증 |
+
+| WebSocket 이벤트 (프론트) | 시점 | 처리 |
+|---|---|---|
+| `onopen` | 연결 완료 | 닉네임 등록 send |
+| `onmessage` | 메시지 수신 | DOM append + 스크롤 |
+| `onclose` | 연결 종료 | UI 리셋 |
+| `onerror` | 오류 | 콘솔 로그 |
+
+| WebSocket 기술 | 핵심 특징 | 선택 기준 |
+|---|---|---|
+| Raw WebSocket | 직접 구현, 최소 설정 | 소규모·단순 실시간 기능 |
+| STOMP over WebSocket | 구독·라우팅 자동화 | 실무 채팅·알림 (주류) |
+| SockJS | WebSocket 폴백 레이어 | 구형 브라우저·기업 내부망 |
+| RSocket | 반응형 스트리밍 | MSA 서비스 간 통신 |
