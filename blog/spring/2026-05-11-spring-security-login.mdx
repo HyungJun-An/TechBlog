@@ -1,0 +1,730 @@
+---
+title: "스프링 시큐리티 · 필터 체인 · 세션 생명주기 · React 인증 연동 완전 정리"
+date: 2026-05-11
+authors: HyungJun
+tags: [Spring, 기본기, React]
+---
+
+import { useState, useEffect, useRef } from 'react';
+
+export function SecurityFilterChainViz() {
+  const [step, setStep] = useState(-1);
+  const [running, setRunning] = useState(false);
+  const timerRef = useRef(null);
+
+  const filters = [
+    {
+      label: '① HTTP 요청',
+      sublabel: 'Browser / React Client',
+      color: '#6b7280',
+      note: 'React(5173)가 보낸 요청은 브라우저 CORS 정책에 따라 OPTIONS Preflight를 먼저 전송합니다. Preflight가 통과해야 본 요청이 전달됩니다.',
+      code: `// React — FormData로 로그인 요청
+const formData = new FormData();
+formData.append("username", user.username);
+formData.append("password", user.password);
+
+await axios.post("http://localhost:8080/login", formData, {
+  withCredentials: true   // JSESSIONID 쿠키를 크로스 오리진에 포함
+});`,
+    },
+    {
+      label: '② DelegatingFilterProxy',
+      sublabel: '서블릿 컨테이너 → 스프링 컨텍스트 위임',
+      color: '#f97316',
+      note: '서블릿 컨테이너(Tomcat)는 스프링 빈을 직접 알 수 없습니다. DelegatingFilterProxy가 스프링 컨텍스트의 FilterChainProxy에 처리를 위임합니다. 스프링 부트가 자동 등록합니다.',
+      code: `// 개발자가 직접 작성하지 않음
+// spring-boot-autoconfigure → SecurityAutoConfiguration →
+// DelegatingFilterProxy → FilterChainProxy 자동 연결`,
+    },
+    {
+      label: '③ CorsFilter',
+      sublabel: 'Origin 검증 · Preflight(OPTIONS) 응답',
+      color: '#ef4444',
+      note: 'CORS는 컨트롤러보다 훨씬 앞단인 이 필터에서 처리됩니다. 컨트롤러의 @CrossOrigin보다 시큐리티 필터가 먼저 실행되므로, CORS를 SecurityFilterChain에서 설정해야 합니다.',
+      code: `@Bean
+CorsConfigurationSource corsConfigurationSource() {
+    CorsConfiguration config = new CorsConfiguration();
+    config.setAllowedOrigins(List.of("http://localhost:5173"));
+    config.setAllowedMethods(List.of("GET","POST","PUT","DELETE","OPTIONS"));
+    config.setAllowedHeaders(List.of("Authorization","Content-Type","Cache-Control"));
+    config.setAllowCredentials(true); // 쿠키 포함 허용
+
+    UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+    source.registerCorsConfiguration("/**", config);
+    return source;
+}`,
+    },
+    {
+      label: '④ SecurityContextPersistenceFilter',
+      sublabel: '세션 → SecurityContext 복원',
+      color: '#f59e0b',
+      note: '요청마다 세션에서 SecurityContext(인증 정보)를 꺼내 SecurityContextHolder에 넣습니다. 요청 처리가 끝나면 다시 세션에 저장하고 스레드 로컬을 비웁니다.',
+      code: `// 내부 동작 원리 (단순화)
+SecurityContext context = repo.loadContext(request); // 세션에서 복원
+SecurityContextHolder.setContext(context);
+
+try {
+    chain.doFilter(request, response); // 나머지 필터 + 컨트롤러 실행
+} finally {
+    repo.saveContext(context, request, response); // 다시 세션에 저장
+    SecurityContextHolder.clearContext();          // 스레드 로컬 정리
+}`,
+    },
+    {
+      label: '⑤ UsernamePasswordAuthenticationFilter',
+      sublabel: 'POST /login 전용 — 인증 처리 시작',
+      color: '#3b82f6',
+      note: 'POST /login 요청만 가로챕니다(다른 URL은 그냥 통과). username/password 파라미터를 추출해 AuthenticationManager → UserDetailsService → PasswordEncoder 순으로 인증을 처리합니다.',
+      code: `// 내부 동작 원리
+String username = obtainUsername(request); // "username" 파라미터
+String password = obtainPassword(request); // "password" 파라미터
+
+UsernamePasswordAuthenticationToken token =
+    new UsernamePasswordAuthenticationToken(username, password);
+
+// AuthenticationManager(ProviderManager) → DaoAuthenticationProvider →
+// UserDetailsService.loadUserByUsername() → BCrypt.matches()
+Authentication auth = authenticationManager.authenticate(token);`,
+    },
+    {
+      label: '⑥ ExceptionTranslationFilter',
+      sublabel: '인증·인가 예외 → HTTP 응답 변환',
+      color: '#8b5cf6',
+      note: 'AccessDeniedException(권한 없음)이나 AuthenticationException(미인증)을 잡아 HTTP 응답으로 변환합니다. @ControllerAdvice는 DispatcherServlet 이후에서만 동작해 이 계층의 예외를 잡지 못합니다.',
+      code: `try {
+    chain.doFilter(request, response);
+} catch (AccessDeniedException ex) {
+    // 로그인은 됐지만 권한 없음 → 403
+    this.accessDeniedHandler.handle(request, response, ex);
+} catch (AuthenticationException ex) {
+    // 미인증 상태에서 보호된 리소스 접근 → 401
+    this.authenticationEntryPoint.commence(request, response, ex);
+}`,
+    },
+    {
+      label: '⑦ FilterSecurityInterceptor',
+      sublabel: '인가(Authorization) 최종 결정',
+      color: '#10b981',
+      note: 'authorizeHttpRequests() 규칙과 현재 인증 정보를 비교해 요청 통과 여부를 최종 결정합니다. 통과하면 DispatcherServlet으로 전달됩니다.',
+      code: `http.authorizeHttpRequests(auth -> auth
+    .requestMatchers("/login", "/register").permitAll()  // 누구나 접근
+    .requestMatchers("/admin/**").hasRole("ADMIN")       // ADMIN 권한 필요
+    .anyRequest().authenticated()                        // 나머지는 로그인 필수
+);`,
+    },
+    {
+      label: '⑧ DispatcherServlet / Controller',
+      sublabel: '비즈니스 로직 처리',
+      color: '#06b6d4',
+      note: '모든 필터를 통과한 요청만 컨트롤러에 도달합니다. SecurityContext에 저장된 인증 정보는 @AuthenticationPrincipal로 바로 주입받을 수 있습니다.',
+      code: `@GetMapping("/api/me")
+public ResponseEntity<Map<String, Object>> getMe(
+        @AuthenticationPrincipal UserDetails user) {
+    return ResponseEntity.ok(Map.of(
+        "username", user.getUsername(),
+        "authorities", user.getAuthorities()
+    ));
+}`,
+    },
+  ];
+
+  const start = () => {
+    if (running) return;
+    setStep(-1);
+    setRunning(true);
+  };
+
+  useEffect(() => {
+    if (!running) return;
+    if (step >= filters.length - 1) {
+      setRunning(false);
+      return;
+    }
+    timerRef.current = setTimeout(() => setStep(s => s + 1), step === -1 ? 100 : 650);
+    return () => clearTimeout(timerRef.current);
+  }, [running, step]);
+
+  const selected = step >= 0 ? filters[step] : null;
+
+  return (
+    <div style={{ fontFamily: 'system-ui, sans-serif', padding: '20px', border: '1px solid var(--ifm-color-emphasis-300)', borderRadius: 12, marginBottom: 24 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <strong style={{ fontSize: 15 }}>Security Filter Chain 흐름 시뮬레이션</strong>
+        <button
+          onClick={start}
+          disabled={running}
+          style={{ padding: '6px 18px', background: running ? '#9ca3af' : '#3b82f6', color: '#fff', border: 'none', borderRadius: 6, cursor: running ? 'default' : 'pointer', fontSize: 13, fontWeight: 600 }}
+        >
+          {running ? '진행 중...' : '▶ 재생'}
+        </button>
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {filters.map((f, i) => (
+          <div key={i}>
+            <div
+              onClick={() => setStep(i)}
+              style={{
+                padding: '9px 14px', borderRadius: 8, cursor: 'pointer',
+                border: `2px solid ${step === i ? f.color : 'var(--ifm-color-emphasis-200)'}`,
+                background: step === i ? `${f.color}18` : step > i ? `${f.color}08` : 'transparent',
+                transition: 'all 0.3s',
+                display: 'flex', alignItems: 'center', gap: 10,
+              }}
+            >
+              <div style={{
+                width: 10, height: 10, borderRadius: '50%',
+                background: step >= i ? f.color : 'var(--ifm-color-emphasis-300)',
+                flexShrink: 0, transition: 'background 0.3s',
+              }} />
+              <div>
+                <div style={{ fontSize: 13, fontWeight: step === i ? 700 : 500, color: step === i ? f.color : 'inherit' }}>{f.label}</div>
+                <div style={{ fontSize: 11, color: 'var(--ifm-color-emphasis-500)', marginTop: 1 }}>{f.sublabel}</div>
+              </div>
+            </div>
+            {i < filters.length - 1 && (
+              <div style={{ textAlign: 'center', color: step > i ? filters[i + 1].color : 'var(--ifm-color-emphasis-300)', fontSize: 11, lineHeight: 1.2 }}>↓</div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {selected && (
+        <div style={{ marginTop: 16, padding: 16, background: 'var(--ifm-color-emphasis-100)', borderRadius: 8, borderLeft: `4px solid ${selected.color}` }}>
+          <div style={{ fontSize: 13, color: selected.color, fontWeight: 700, marginBottom: 6 }}>{selected.label}</div>
+          <div style={{ fontSize: 12, color: 'var(--ifm-color-emphasis-700)', marginBottom: 10, lineHeight: 1.6 }}>{selected.note}</div>
+          <pre style={{ margin: 0, padding: '12px', background: 'var(--ifm-color-emphasis-200)', borderRadius: 6, fontSize: 11, overflowX: 'auto', lineHeight: 1.5 }}>
+            <code>{selected.code}</code>
+          </pre>
+        </div>
+      )}
+      <div style={{ marginTop: 8, fontSize: 11, color: 'var(--ifm-color-emphasis-400)', textAlign: 'center' }}>
+        각 단계를 클릭하거나 ▶ 버튼으로 순차 재생
+      </div>
+    </div>
+  );
+}
+
+export function StepItem({ num, label, code, color, open: initialOpen }) {
+  const [open, setOpen] = useState(!!initialOpen);
+  return (
+    <div style={{ marginBottom: 6 }}>
+      <div
+        onClick={() => setOpen(o => !o)}
+        style={{
+          padding: '9px 14px', borderRadius: 8, cursor: 'pointer',
+          background: 'var(--ifm-color-emphasis-100)',
+          border: '1px solid var(--ifm-color-emphasis-200)',
+          display: 'flex', alignItems: 'center', gap: 10,
+        }}
+      >
+        <div style={{
+          width: 22, height: 22, borderRadius: '50%',
+          background: color, color: '#fff',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontSize: 11, fontWeight: 700, flexShrink: 0,
+        }}>{num}</div>
+        <span style={{ fontSize: 13, fontWeight: 500 }}>{label}</span>
+        <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--ifm-color-emphasis-400)' }}>{open ? '▲' : '▼'}</span>
+      </div>
+      {open && (
+        <pre style={{ margin: '4px 0 0 0', padding: '12px 14px', background: 'var(--ifm-color-emphasis-200)', borderRadius: 8, fontSize: 11, overflowX: 'auto', lineHeight: 1.5 }}>
+          <code>{code}</code>
+        </pre>
+      )}
+    </div>
+  );
+}
+
+export function AuthFlowTabs() {
+  const [activeTab, setActiveTab] = useState('success');
+
+  const tabs = {
+    success: {
+      label: '✓ 인증 성공 흐름',
+      color: '#10b981',
+      steps: [
+        {
+          label: 'React — FormData 전송',
+          code: `const formData = new FormData();
+formData.append("username", "user1");   // 시큐리티 기본 파라미터명
+formData.append("password", "1234");
+
+await axios.post("http://localhost:8080/login", formData, {
+  withCredentials: true  // 쿠키 포함 요청 허용
+});`,
+        },
+        {
+          label: 'UsernamePasswordAuthenticationFilter — 파라미터 추출',
+          code: `// POST /login 요청을 필터가 가로챔
+// 파라미터 이름이 다르면 아래 설정으로 변경 가능
+http.formLogin(form -> form
+    .loginProcessingUrl("/login")
+    .usernameParameter("username")  // 기본값
+    .passwordParameter("password")  // 기본값
+);`,
+        },
+        {
+          label: 'UserDetailsService.loadUserByUsername()',
+          code: `@Service
+@RequiredArgsConstructor
+public class UserDetailsServiceImpl implements UserDetailsService {
+
+    private final UserRepository userRepo;
+
+    @Override
+    public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {
+        UserEntity user = userRepo.findByLoginId(username)
+            .orElseThrow(() -> new UsernameNotFoundException("존재하지 않는 계정: " + username));
+
+        // 엔티티를 스프링 시큐리티 UserDetails로 변환
+        return User.builder()
+            .username(user.getId())
+            .password(user.getPassword())  // BCrypt 해시값
+            .roles(user.getRole())         // ROLE_ 접두사 자동 추가
+            .build();
+    }
+}`,
+        },
+        {
+          label: 'BCryptPasswordEncoder.matches() — 비밀번호 검증',
+          code: `// 개발자가 직접 호출하지 않음 — DaoAuthenticationProvider가 내부에서 처리
+// passwordEncoder.matches("1234", "$2a$10$...BCrypt해시...");
+
+// PasswordEncoder 빈 등록 필수 (없으면 예외 발생)
+@Bean
+public BCryptPasswordEncoder passwordEncoder() {
+    return new BCryptPasswordEncoder();
+}
+
+// 회원가입 시 저장 방법
+user.setPassword(passwordEncoder.encode(rawPassword));`,
+        },
+        {
+          label: 'SecurityContext 저장 & JSESSIONID 발급',
+          code: `// 인증 성공 후 스프링 시큐리티 자동 처리
+SecurityContextHolder.getContext().setAuthentication(auth);
+// → HttpSession에 SPRING_SECURITY_CONTEXT 키로 저장
+
+// 응답 헤더
+// Set-Cookie: JSESSIONID=abc123xyz; Path=/; HttpOnly
+
+// 이후 요청마다 브라우저가 자동으로 쿠키 포함
+// Cookie: JSESSIONID=abc123xyz`,
+        },
+        {
+          label: 'React — 사용자 정보 sessionStorage 저장',
+          code: `// 로그인 성공 후 /api/me로 사용자 정보 조회
+const response = await axios.get("/api/me", { withCredentials: true });
+
+// sessionStorage에 저장 — 탭 닫히면 자동 삭제
+sessionStorage.setItem("user", JSON.stringify(response.data));
+
+// 저장 결과 예시
+// { "username": "user1", "auth": [{ "authority": "ROLE_USER" }] }`,
+        },
+      ],
+    },
+    failure: {
+      label: '✗ 인증 실패 흐름',
+      color: '#ef4444',
+      steps: [
+        {
+          label: '잘못된 자격증명으로 요청',
+          code: `formData.append("username", "user1");
+formData.append("password", "wrongPw");  // 틀린 비밀번호`,
+        },
+        {
+          label: '예외 발생 — 필터 계층',
+          code: `// UsernameNotFoundException — 존재하지 않는 아이디
+// BadCredentialsException    — 비밀번호 불일치
+
+// ⚠️ @ControllerAdvice는 DispatcherServlet 이후에서만 동작
+// 시큐리티 필터 계층 예외는 잡히지 않음
+// → AuthenticationFailureHandler를 별도 구현해야 함`,
+        },
+        {
+          label: 'AuthenticationFailureHandler — JSON 401 반환',
+          code: `@Component
+public class CustomFailureHandler implements AuthenticationFailureHandler {
+
+    @Override
+    public void onAuthenticationFailure(HttpServletRequest req,
+            HttpServletResponse res,
+            AuthenticationException ex) throws IOException {
+
+        res.setStatus(HttpServletResponse.SC_UNAUTHORIZED); // 401
+        res.setContentType("application/json;charset=UTF-8");
+        res.getWriter().write("""
+            {"error": "아이디 또는 비밀번호가 올바르지 않습니다."}
+            """);
+    }
+}
+
+// SecurityFilterChain에 등록
+http.formLogin(form -> form
+    .failureHandler(customFailureHandler)
+);`,
+        },
+        {
+          label: 'React — 상태 코드 기반 에러 처리',
+          code: `try {
+    await axios.post("/login", formData, { withCredentials: true });
+    // 성공 처리
+} catch (error) {
+    if (error.response?.status === 401) {
+        setErrorMsg("아이디 또는 비밀번호를 확인하세요.");
+    } else {
+        setErrorMsg("서버 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.");
+    }
+}`,
+        },
+      ],
+    },
+  };
+
+  const active = tabs[activeTab];
+
+  return (
+    <div style={{ fontFamily: 'system-ui, sans-serif', border: '1px solid var(--ifm-color-emphasis-300)', borderRadius: 12, overflow: 'hidden', marginBottom: 24 }}>
+      <div style={{ display: 'flex', borderBottom: '1px solid var(--ifm-color-emphasis-300)' }}>
+        {Object.entries(tabs).map(([key, tab]) => (
+          <button
+            key={key}
+            onClick={() => setActiveTab(key)}
+            style={{
+              flex: 1, padding: '12px', border: 'none', cursor: 'pointer',
+              background: activeTab === key ? `${tab.color}15` : 'var(--ifm-color-emphasis-100)',
+              color: activeTab === key ? tab.color : 'var(--ifm-color-emphasis-600)',
+              fontWeight: activeTab === key ? 700 : 400, fontSize: 14,
+              borderBottom: activeTab === key ? `3px solid ${tab.color}` : '3px solid transparent',
+              transition: 'all 0.2s',
+            }}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+      <div style={{ padding: '16px' }}>
+        {active.steps.map((s, i) => (
+          <StepItem key={i} num={i + 1} label={s.label} code={s.code} color={active.color} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function SessionLifecycleViz() {
+  const [phase, setPhase] = useState('initial');
+  const [log, setLog] = useState([]);
+  const [reqCount, setReqCount] = useState(0);
+  const logEndRef = useRef(null);
+
+  const addLog = (msg, color) => {
+    const time = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    setLog(prev => [...prev, { msg, color, time }]);
+  };
+
+  useEffect(() => {
+    logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [log]);
+
+  const doLogin = () => {
+    if (phase !== 'initial') return;
+    setPhase('loggedIn');
+    addLog('POST /login → 인증 성공 (user1 / ROLE_USER)', '#10b981');
+    addLog('HttpSession 생성 → ID: abc123xyz', '#3b82f6');
+    addLog('SPRING_SECURITY_CONTEXT 세션에 저장', '#8b5cf6');
+    addLog('Set-Cookie: JSESSIONID=abc123xyz; Path=/; HttpOnly', '#f59e0b');
+  };
+
+  const doRequest = () => {
+    if (phase !== 'loggedIn') return;
+    const n = reqCount + 1;
+    setReqCount(n);
+    addLog(`GET /api/data (요청 #${n}) → Cookie: JSESSIONID=abc123xyz`, '#3b82f6');
+    addLog('세션 조회 → SecurityContext 복원 → 인증된 요청 처리', '#10b981');
+  };
+
+  const doLogout = () => {
+    if (phase !== 'loggedIn') return;
+    setPhase('loggedOut');
+    addLog('POST /logout → session.invalidate()', '#ef4444');
+    addLog('SPRING_SECURITY_CONTEXT 세션에서 제거', '#ef4444');
+    addLog('Set-Cookie: JSESSIONID=; Max-Age=0 (쿠키 삭제)', '#ef4444');
+  };
+
+  const doReset = () => {
+    setPhase('initial');
+    setLog([]);
+    setReqCount(0);
+  };
+
+  const phaseInfo = {
+    initial:   { label: '미인증', color: '#6b7280', cookie: '없음' },
+    loggedIn:  { label: '인증됨', color: '#10b981', cookie: 'JSESSIONID=abc123xyz' },
+    loggedOut: { label: '로그아웃', color: '#ef4444', cookie: '삭제됨' },
+  };
+  const info = phaseInfo[phase];
+
+  return (
+    <div style={{ fontFamily: 'system-ui, sans-serif', border: '1px solid var(--ifm-color-emphasis-300)', borderRadius: 12, overflow: 'hidden', marginBottom: 24 }}>
+      <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--ifm-color-emphasis-300)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+        <strong style={{ fontSize: 15 }}>세션 생명주기 시뮬레이터</strong>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+          <div style={{ width: 8, height: 8, borderRadius: '50%', background: info.color }} />
+          <span style={{ color: info.color, fontWeight: 600 }}>{info.label}</span>
+          <span style={{ color: 'var(--ifm-color-emphasis-500)' }}>| Cookie: {info.cookie}</span>
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0 }}>
+        <div style={{ padding: '16px', borderRight: '1px solid var(--ifm-color-emphasis-200)' }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ifm-color-emphasis-600)', marginBottom: 10 }}>동작 시뮬레이션</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {[
+              { label: '① 로그인 (POST /login)', phase: 'initial', action: doLogin, color: '#10b981' },
+              { label: '② 인증 요청 (GET /api/data)', phase: 'loggedIn', action: doRequest, color: '#3b82f6' },
+              { label: '③ 로그아웃 (POST /logout)', phase: 'loggedIn', action: doLogout, color: '#ef4444' },
+            ].map(({ label, phase: enabledPhase, action, color }) => (
+              <button
+                key={label}
+                onClick={action}
+                disabled={phase !== enabledPhase}
+                style={{
+                  padding: '10px', borderRadius: 8, border: 'none',
+                  cursor: phase !== enabledPhase ? 'default' : 'pointer',
+                  background: phase !== enabledPhase ? 'var(--ifm-color-emphasis-200)' : color,
+                  color: phase !== enabledPhase ? 'var(--ifm-color-emphasis-400)' : '#fff',
+                  fontSize: 13, fontWeight: 600, transition: 'all 0.2s',
+                }}
+              >{label}</button>
+            ))}
+            <button
+              onClick={doReset}
+              style={{ padding: '8px', borderRadius: 8, border: '1px solid var(--ifm-color-emphasis-300)', cursor: 'pointer', background: 'transparent', color: 'var(--ifm-color-emphasis-600)', fontSize: 13 }}
+            >↺ 초기화</button>
+          </div>
+
+          <div style={{ marginTop: 14, padding: '12px', background: 'var(--ifm-color-emphasis-100)', borderRadius: 8, fontSize: 12 }}>
+            <div style={{ fontWeight: 600, marginBottom: 6, color: 'var(--ifm-color-emphasis-700)' }}>HttpSession 상태</div>
+            {phase === 'initial' && <div style={{ color: '#6b7280' }}>세션 없음 — 로그인 전</div>}
+            {phase === 'loggedIn' && (
+              <div style={{ color: 'var(--ifm-color-emphasis-700)', lineHeight: 1.7 }}>
+                <span style={{ color: '#10b981', fontWeight: 600 }}>✓ 활성</span><br />
+                ID: abc123xyz<br />
+                KEY: SPRING_SECURITY_CONTEXT<br />
+                USERNAME: user1 / ROLE: ROLE_USER<br />
+                <span style={{ color: '#3b82f6' }}>처리된 요청: {reqCount}건</span>
+              </div>
+            )}
+            {phase === 'loggedOut' && (
+              <div>
+                <div style={{ color: '#ef4444', fontWeight: 600 }}>✗ 무효화됨</div>
+                <div style={{ color: 'var(--ifm-color-emphasis-500)', marginTop: 4, fontSize: 11, lineHeight: 1.6 }}>
+                  invalidateHttpSession(true)<br />
+                  deleteCookies("JSESSIONID")
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div style={{ padding: '16px' }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ifm-color-emphasis-600)', marginBottom: 10 }}>이벤트 로그</div>
+          <div style={{ height: 270, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 5 }}>
+            {log.length === 0 && (
+              <div style={{ color: 'var(--ifm-color-emphasis-400)', fontSize: 12, textAlign: 'center', marginTop: 60 }}>
+                왼쪽 버튼으로 시뮬레이션을 시작하세요
+              </div>
+            )}
+            {log.map((entry, i) => (
+              <div key={i} style={{
+                padding: '6px 10px', borderRadius: 6,
+                background: 'var(--ifm-color-emphasis-100)',
+                borderLeft: `3px solid ${entry.color}`,
+                fontSize: 11, lineHeight: 1.4,
+              }}>
+                <span style={{ color: 'var(--ifm-color-emphasis-400)', marginRight: 6 }}>{entry.time}</span>
+                <span>{entry.msg}</span>
+              </div>
+            ))}
+            <div ref={logEndRef} />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+스프링 시큐리티는 **모든 요청이 컨트롤러에 닿기 전에 필터 체인을 통과한다**는 한 가지 전제에서 출발한다. 이 전제를 이해하면 CORS를 왜 컨트롤러가 아닌 시큐리티에서 처리해야 하는지, 로그인 실패를 왜 `@ControllerAdvice`로 잡지 못하는지, 세션이 언제 만들어지고 사라지는지 자연스럽게 이해된다.
+
+<!-- truncate -->
+
+## 1. 웹 요청 흐름: 필터 체인이 먼저다
+
+HTTP 요청은 `DispatcherServlet`에 닿기 전에 `DelegatingFilterProxy` → `FilterChainProxy` → `SecurityFilterChain` 순서로 통과한다. 컨트롤러는 이 모든 관문을 통과한 요청만 받는다.
+
+**DelegatingFilterProxy** 서블릿 컨테이너(Tomcat)는 스프링 빈을 직접 알 수 없다. DelegatingFilterProxy가 스프링 컨텍스트에 등록된 FilterChainProxy에 처리를 위임하는 브릿지 역할을 한다. 스프링 부트가 자동으로 등록하므로 직접 작성하지 않는다.
+
+> 핵심: `@CrossOrigin`은 컨트롤러 어노테이션이다. 시큐리티 필터가 CORS Preflight를 먼저 막으면 컨트롤러까지 도달하지 못한다. CORS 설정은 반드시 `SecurityFilterChain`에서 처리해야 한다.
+
+아래 시뮬레이터에서 각 필터를 클릭하거나 ▶ 버튼으로 전체 흐름을 확인하자.
+
+<SecurityFilterChainViz />
+
+| 필터 | 역할 | 적용 대상 |
+|---|---|---|
+| `CorsFilter` | Origin 검증, Preflight 응답 | 모든 요청 |
+| `SecurityContextPersistenceFilter` | 세션 → SecurityContext 복원 | 모든 요청 |
+| `UsernamePasswordAuthenticationFilter` | 로그인 처리 | POST `/login` 전용 |
+| `ExceptionTranslationFilter` | 인증·인가 예외 → HTTP 변환 | 모든 요청 |
+| `FilterSecurityInterceptor` | 인가 최종 결정 | 모든 요청 |
+
+### 핵심 키워드
+`DelegatingFilterProxy` `FilterChainProxy` `SecurityFilterChain` `CorsFilter` `FilterSecurityInterceptor`
+
+---
+
+## 2. DB 기반 인증 흐름
+
+기본 인증(콘솔 임시 비밀번호)을 넘어 실무에서는 DB에 저장된 사용자 정보로 인증해야 한다. `UserDetailsService`를 구현하면 `UsernamePasswordAuthenticationFilter` → `AuthenticationManager` → `DaoAuthenticationProvider` → `UserDetailsService` → `BCryptPasswordEncoder` 로 이어지는 인증 체인이 완성된다.
+
+개발자가 직접 비밀번호를 비교하지 않는 것이 핵심이다. `PasswordEncoder` 빈만 등록하면 `DaoAuthenticationProvider`가 내부에서 `matches()`를 호출해 검증한다.
+
+<AuthFlowTabs />
+
+```java
+// SecurityFilterChain — UserDetailsService + PasswordEncoder 연결
+@Bean
+public SecurityFilterChain filterChain(HttpSecurity http,
+        UserDetailsService userDetailsService) throws Exception {
+    http
+        .csrf(csrf -> csrf.disable())
+        .cors(cors -> cors.configurationSource(corsConfigurationSource()))
+        .formLogin(form -> form
+            .loginProcessingUrl("/login")
+            .successHandler(customSuccessHandler)
+            .failureHandler(customFailureHandler)
+        )
+        .logout(logout -> logout
+            .logoutUrl("/logout")
+            .invalidateHttpSession(true)
+            .deleteCookies("JSESSIONID")
+        )
+        .authorizeHttpRequests(auth -> auth
+            .requestMatchers("/login", "/register").permitAll()
+            .anyRequest().authenticated()
+        )
+        .userDetailsService(userDetailsService);
+    return http.build();
+}
+```
+
+### 핵심 키워드
+`UserDetailsService` `UserDetails` `DaoAuthenticationProvider` `BCryptPasswordEncoder` `UsernameNotFoundException`
+
+---
+
+## 3. 세션 생명주기
+
+로그인 성공 시 `HttpSession`이 생성되고 `JSESSIONID` 쿠키가 발급된다. 이후 브라우저는 모든 요청에 이 쿠키를 자동으로 포함하고, 서버는 세션에서 `SecurityContext`를 복원해 인증된 요청으로 처리한다.
+
+**세션 타임아웃** 기본 30분이다. 마지막 요청으로부터 30분이 경과하면 세션이 만료된다. `server.servlet.session.timeout=1800` 으로 변경 가능하다.
+
+<SessionLifecycleViz />
+
+```properties
+# application.properties
+server.servlet.session.timeout=1800   # 초 단위 (기본 30분)
+
+# 세션 쿠키 보안 옵션 (운영 환경)
+server.servlet.session.cookie.http-only=true   # JS 접근 차단
+server.servlet.session.cookie.secure=true      # HTTPS 전용
+server.servlet.session.cookie.same-site=None   # 크로스 오리진 허용 시
+```
+
+> React + Spring 분리 아키텍처에서 세션 쿠키를 사용하려면 Axios에 `withCredentials: true`가 필요하다. 이 설정 없이는 브라우저가 크로스 오리진 요청에 쿠키를 포함하지 않는다.
+
+### 핵심 키워드
+`HttpSession` `JSESSIONID` `SecurityContextHolder` `invalidateHttpSession` `session.timeout`
+
+---
+
+## 4. React 연동: CORS · FormData · sessionStorage
+
+분리 아키텍처(React + Spring Boot)에서 인증 연동 시 반드시 처리해야 할 세 가지 포인트가 있다.
+
+### CORS — 시큐리티 필터에서 처리
+
+```java
+@Bean
+CorsConfigurationSource corsConfigurationSource() {
+    CorsConfiguration config = new CorsConfiguration();
+    config.setAllowedOrigins(List.of("http://localhost:5173")); // Vite 개발 서버
+    config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"));
+    config.setAllowedHeaders(List.of("Authorization", "Content-Type", "Cache-Control"));
+    config.setAllowCredentials(true); // 쿠키 포함 허용 — setAllowedOrigins("*")와 함께 쓸 수 없음
+
+    UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+    source.registerCorsConfiguration("/**", config);
+    return source;
+}
+```
+
+### FormData — 시큐리티 기본 파라미터명 준수
+
+스프링 시큐리티 폼 로그인은 기본적으로 `username`, `password` 파라미터를 기대한다. 프론트에서 다른 키 이름을 쓰면 인증 필터가 값을 읽지 못한다.
+
+```javascript
+// React — 로그인 요청
+const loginHandler = async () => {
+  const formData = new FormData();
+  formData.append("username", user.username); // 시큐리티 기본값과 일치
+  formData.append("password", user.password);
+  if (rememberMe) formData.append("remember-me", "on");
+
+  try {
+    await axios.post("http://localhost:8080/login", formData, {
+      withCredentials: true,
+    });
+    const me = await axios.get("http://localhost:8080/api/me", {
+      withCredentials: true,
+    });
+    // sessionStorage에 사용자 정보 저장
+    sessionStorage.setItem("user", JSON.stringify(me.data));
+    setIsLoggedIn(true);
+  } catch (error) {
+    if (error.response?.status === 401) {
+      setErrorMsg("아이디 또는 비밀번호를 확인하세요.");
+    }
+  }
+};
+```
+
+### sessionStorage vs localStorage
+
+**sessionStorage** 탭이 닫히면 자동 삭제된다. 로그인 상태 관리처럼 탭 종료 시 초기화되는 것이 자연스러운 데이터에 적합하다.
+- `sessionStorage.setItem("user", JSON.stringify(data))`
+- `JSON.parse(sessionStorage.getItem("user"))`
+
+**localStorage** 브라우저를 닫아도 유지된다. 자동 로그인(rememberMe) 용도에 적합하지만, XSS에 취약하므로 민감한 토큰은 저장하지 않는다.
+
+> 권한(`ROLE_USER`)은 시큐리티 특성상 `ROLE_` 접두사가 붙어 전달된다. 프론트에서 역할 기반 UI 분기 시 이 접두사를 고려해야 한다.
+
+### 핵심 키워드
+`withCredentials` `FormData` `sessionStorage` `ROLE_` 접두사 `allowCredentials`
+
+---
+
+## 정리: 세션 기반 vs 토큰(JWT) 기반
+
+| 기준 | 세션(JSESSIONID) | JWT |
+|---|---|---|
+| 인증 정보 저장 위치 | 서버(세션 저장소) | 클라이언트(토큰 자체) |
+| 서버 확장성 | 세션 동기화 필요 | Stateless — 수평 확장 유리 |
+| 로그아웃 즉시성 | `invalidateHttpSession()` 즉시 무효화 | 만료까지 유효 (블랙리스트 별도 필요) |
+| CSRF 위험 | 쿠키 기반이므로 CSRF 설정 필요 | Authorization 헤더 사용 시 CSRF 불필요 |
+| 적합한 상황 | 단일 서버, 관리형 세션이 중요한 경우 | MSA, 수평 확장, 모바일 클라이언트 |
+
+세션 기반이 나쁜 것이 아니다. 단일 서버 운영, 즉각적인 로그아웃 제어가 중요하거나 세션 관리 비용이 낮은 상황에서는 세션이 JWT보다 단순하고 안전하다. 아키텍처 맥락에 따라 선택하면 된다.
